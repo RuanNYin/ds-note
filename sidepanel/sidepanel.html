@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DeepSeek Notes</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1 id="title">DeepSeek Notes</h1>
+      <div class="header-actions">
+        <button id="themeBtn" class="icon-btn" title="Toggle theme">🌙</button>
+        <button id="langBtn" class="lang-btn">中文</button>
+      </div>
+    </header>
+
+    <div class="search-bar">
+      <input type="text" id="searchInput" placeholder="Search notes...">
+      <button id="clearSearch" class="clear-search">✕</button>
+    </div>
+
+    <div class="toolbar">
+      <div class="view-toggle">
+        <button id="viewStarredBtn" class="toggle-btn" title="Starred">⭐</button>
+        <button id="viewCurrentBtn" class="toggle-btn active">Current</button>
+        <button id="viewAllBtn" class="toggle-btn">All</button>
+      </div>
+      <div class="toolbar-actions">
+        <button id="selectBtn" class="tool-btn">Select</button>
+        <button id="exportBtn" class="tool-btn">Export ▼</button>
+        <button id="clearBtn" class="tool-btn danger">Clear</button>
+      </div>
+    </div>
+
+    <div id="selectionActions" class="selection-bar">
+      <button id="selectAllBtn">Select All</button>
+      <span id="selCount" class="sel-count">(0)</span>
+      <div class="sel-spacer"></div>
+      <button id="copySelectedBtn">Copy</button>
+      <button id="exportSelectedBtn">Export</button>
+    </div>
+
+    <div id="exportMenu" class="dropdown-menu hidden">
+      <div class="menu-group">
+        <div class="menu-label" id="menuFormatLabel">FORMAT</div>
+        <div class="format-toggle">
+          <button id="formatMd" class="format-btn active">MD</button>
+          <button id="formatJsonl" class="format-btn">JSONL</button>
+        </div>
+      </div>
+      <div class="menu-group">
+        <div class="menu-label" id="menuExportLabel">EXPORT</div>
+        <button id="exportAll">Export All</button>
+        <button id="exportCurrent">Export Current</button>
+        <button id="exportByConvo">By Conversation</button>
+      </div>
+      <div class="menu-group">
+        <div class="menu-label" id="menuCopyLabel">COPY</div>
+        <button id="copyAll">Copy All</button>
+        <button id="copyCurrent">Copy Current</button>
+      </div>
+    </div>
+
+    <div id="notesList" class="notes-list">
+      <div class="empty-state">
+        <div class="empty-icon">📝</div>
+        <p id="emptyText">No saved notes yet</p>
+        <p id="emptyHint" class="hint">Select text in DeepSeek and click 📌 to save</p>
+      </div>
+    </div>
+
+    <footer>
+      <span id="noteCount">0 notes</span>
+      <span id="currentUrl" class="current-url"></span>
+    </footer>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
