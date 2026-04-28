@@ -18,9 +18,9 @@
 
 ## 👋 Why DS Note?
 
-We love DeepSeek, but sometimes in long conversations, we wish we could **extract key snippets**, **highlight important content**, or **export the entire conversation** for backup.
+The deeper you go with DeepSeek, the longer your conversations get. Ever spent minutes scrolling to find that one brilliant response?
 
-That's why we built DS Note — a power-up for DeepSeek that lets you save on the fly, search quickly, and jump back to the original context with one click.
+DS Note is built for exactly this — **extract key snippets**, **highlight important content**, **export conversations**, and jump back to the original context with one click.
 
 ## ✨ Features
 
