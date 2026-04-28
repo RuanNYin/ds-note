@@ -1,24 +1,26 @@
 <div align="center">
 
-# 📌 DeepSeek Notes
+# 📌 DS Note
 
-**保存、管理和快速定位你的 DeepSeek 对话**
+**DeepSeek 对话增强插件**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![Chrome](https://img.shields.io/badge/Chrome-扩展-green?style=flat-square&logo=googlechrome&logoColor=white)](https://github.com/chenxiachan/deepseek-notes)
-[![GitHub stars](https://img.shields.io/github/stars/chenxiachan/deepseek-notes?style=flat-square)](https://github.com/chenxiachan/deepseek-notes/stargazers)
+[![Chrome](https://img.shields.io/badge/Chrome-扩展-green?style=flat-square&logo=googlechrome&logoColor=white)](https://github.com/chenxiachan/ds-note)
+[![GitHub stars](https://img.shields.io/github/stars/chenxiachan/ds-note?style=flat-square)](https://github.com/chenxiachan/ds-note/stargazers)
 
 [English](README_EN.md) · [中文](README.md)
+
+*DS Note is not affiliated with DeepSeek. DeepSeek is a trademark of DeepSeek.*
 
 </div>
 
 ---
 
-![DeepSeek Notes 截图](assets/2.png)
+![DS Note 截图](assets/2.png)
 
-## 👋 为什么需要 DeepSeek Notes？
+## 👋 为什么需要 DS Note？
 
-在与 DeepSeek 进行长对话时，你可能想要**摘取重要片段**、**高亮关键内容**，或者**导出整个对话**备份。DeepSeek Notes 让你可以随手保存、快速检索，并一键跳转回原始上下文。
+在与 DeepSeek 进行长对话时，你可能想要**摘取重要片段**、**高亮关键内容**，或者**导出整个对话**备份。DS Note 让你可以随手保存、快速检索，并一键跳转回原始上下文。
 
 ## ✨ 功能
 

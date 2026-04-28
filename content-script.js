@@ -1,4 +1,4 @@
-// DeepSeek Notes - Content Script
+// DS Note - Content Script
 // Shows save button when text is selected
 
 (function() {
@@ -1158,5 +1158,5 @@
     return new Promise(r => setTimeout(r, ms));
   }
 
-  console.log('[DeepSeek Notes] Selection mode loaded');
+  console.log('[DS Note] Selection mode loaded');
 })();

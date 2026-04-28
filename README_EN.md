@@ -1,24 +1,26 @@
 <div align="center">
 
-# 📌 DeepSeek Notes
+# 📌 DS Note
 
-**Save, organize, and navigate your DeepSeek conversations**
+**Enhancement extension for DeepSeek**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
-[![Chrome](https://img.shields.io/badge/Chrome-Extension-green?style=flat-square&logo=googlechrome&logoColor=white)](https://github.com/chenxiachan/deepseek-notes)
-[![GitHub stars](https://img.shields.io/github/stars/chenxiachan/deepseek-notes?style=flat-square)](https://github.com/chenxiachan/deepseek-notes/stargazers)
+[![Chrome](https://img.shields.io/badge/Chrome-Extension-green?style=flat-square&logo=googlechrome&logoColor=white)](https://github.com/chenxiachan/ds-note)
+[![GitHub stars](https://img.shields.io/github/stars/chenxiachan/ds-note?style=flat-square)](https://github.com/chenxiachan/ds-note/stargazers)
 
 [English](README_EN.md) · [中文](README.md)
+
+*DS Note is not affiliated with DeepSeek. DeepSeek is a trademark of DeepSeek.*
 
 </div>
 
 ---
 
-![DeepSeek Notes Screenshot](assets/1.png)
+![DS Note Screenshot](assets/1.png)
 
-## 👋 Why DeepSeek Notes?
+## 👋 Why DS Note?
 
-When having long conversations with DeepSeek, you may want to **extract key snippets**, **highlight important content**, or **export the entire conversation** for backup. DeepSeek Notes lets you save on the fly, search quickly, and jump back to the original context with one click.
+When having long conversations with DeepSeek, you may want to **extract key snippets**, **highlight important content**, or **export the entire conversation** for backup. DS Note lets you save on the fly, search quickly, and jump back to the original context with one click.
 
 ## ✨ Features
 

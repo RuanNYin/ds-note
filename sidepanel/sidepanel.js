@@ -1,4 +1,4 @@
-// DeepSeek Notes - Side Panel
+// DS Note - Side Panel
 
 const STORAGE_KEY = 'ds_saved_messages';
 const SETTINGS_KEY = 'ds_notes_settings';
@@ -6,7 +6,7 @@ const SETTINGS_KEY = 'ds_notes_settings';
 // i18n
 const i18n = {
   en: {
-    title: 'DeepSeek Notes',
+    title: 'DS Note',
     all: 'All',
     current: 'Current',
     starred: 'Starred',
@@ -46,7 +46,7 @@ const i18n = {
     jumpTo: 'Jump to original'
   },
   zh: {
-    title: 'DeepSeek 笔记',
+    title: 'DS Note',
     all: '全部',
     current: '当前',
     starred: '星标',
@@ -411,7 +411,7 @@ function toJsonl(msgs, title) {
     starred: m.starred || false,
     conversationUrl: m.conversationUrl,
     savedAt: new Date(m.savedAt).toISOString(),
-    source: title || 'DeepSeek Notes'
+    source: title || 'DS Note'
   })).join('\n');
 }
 

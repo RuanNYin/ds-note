@@ -1,4 +1,4 @@
-// DeepSeek Notes - Background Service Worker
+// DS Note - Background Service Worker
 
 const STORAGE_KEY = 'ds_saved_messages';
 
@@ -94,4 +94,4 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 // Open side panel when clicking extension icon (only works on enabled tabs)
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
-console.log('[DeepSeek Notes] Service worker loaded');
+console.log('[DS Note] Service worker loaded');
