@@ -1,0 +1,10 @@
+.DS_Store
+*.pptx
+~$*
+
+# Marketing materials (not part of extension)
+assets/ANNOTATIONS.md
+assets/reddit_post.md
+assets/xiaohongshu.md
+assets/xhs_*.png
+assets/screenshot_*.png
