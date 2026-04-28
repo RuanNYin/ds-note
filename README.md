@@ -2,15 +2,13 @@
 
 # 📌 DS Note
 
-**DeepSeek 对话增强插件**
+**让你的 DeepSeek™ 对话体验更完整**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Chrome](https://img.shields.io/badge/Chrome-扩展-green?style=flat-square&logo=googlechrome&logoColor=white)](https://github.com/chenxiachan/ds-note)
 [![GitHub stars](https://img.shields.io/github/stars/chenxiachan/ds-note?style=flat-square)](https://github.com/chenxiachan/ds-note/stargazers)
 
 [English](README_EN.md) · [中文](README.md)
-
-*DS Note is not affiliated with DeepSeek. DeepSeek is a trademark of DeepSeek.*
 
 </div>
 
@@ -20,7 +18,9 @@
 
 ## 👋 为什么需要 DS Note？
 
-在与 DeepSeek 进行长对话时，你可能想要**摘取重要片段**、**高亮关键内容**，或者**导出整个对话**备份。DS Note 让你可以随手保存、快速检索，并一键跳转回原始上下文。
+我们喜欢 DeepSeek，但在长对话中，有时候会想要**摘取重要片段**、**高亮关键内容**，或者**导出整个对话**备份。
+
+这就是我们构建 DS Note 的原因 —— 一个专为 DeepSeek 打造的增强插件，让你可以随手保存、快速检索，并一键跳转回原始上下文。
 
 ## ✨ 功能
 
@@ -40,7 +40,7 @@
 
 <div align="center">
 
-[![从源码安装](https://img.shields.io/badge/从源码安装-black?style=for-the-badge&logo=github)](https://github.com/chenxiachan/deepseek-notes/archive/refs/heads/main.zip)
+[![从源码安装](https://img.shields.io/badge/从源码安装-black?style=for-the-badge&logo=github)](https://github.com/chenxiachan/ds-note/archive/refs/heads/main.zip)
 
 </div>
 
@@ -48,7 +48,7 @@
 2. 打开 Chrome → `chrome://extensions`
 3. 启用右上角的**开发者模式**
 4. 点击**加载已解压的扩展程序**
-5. 选择 `deepseek-notes` 文件夹
+5. 选择 `ds-note` 文件夹
 
 ## 🚀 使用方法
 
@@ -68,7 +68,7 @@
 ## 📁 项目结构
 
 ```
-deepseek-notes/
+ds-note/
 ├── manifest.json        # 扩展配置
 ├── background.js        # Service Worker
 ├── content-script.js    # 保存和跳转逻辑
@@ -85,5 +85,7 @@ deepseek-notes/
 <div align="center">
 
 **如果觉得有用，请给个 ⭐ Star！**
+
+<sub>DS Note is not affiliated with DeepSeek. DeepSeek is a trademark of DeepSeek.</sub>
 
 </div>

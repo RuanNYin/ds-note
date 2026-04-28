@@ -2,15 +2,13 @@
 
 # 📌 DS Note
 
-**Enhancement extension for DeepSeek**
+**Make Your DeepSeek™ Experience Truly Yours**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Chrome](https://img.shields.io/badge/Chrome-Extension-green?style=flat-square&logo=googlechrome&logoColor=white)](https://github.com/chenxiachan/ds-note)
 [![GitHub stars](https://img.shields.io/github/stars/chenxiachan/ds-note?style=flat-square)](https://github.com/chenxiachan/ds-note/stargazers)
 
 [English](README_EN.md) · [中文](README.md)
-
-*DS Note is not affiliated with DeepSeek. DeepSeek is a trademark of DeepSeek.*
 
 </div>
 
@@ -20,7 +18,9 @@
 
 ## 👋 Why DS Note?
 
-When having long conversations with DeepSeek, you may want to **extract key snippets**, **highlight important content**, or **export the entire conversation** for backup. DS Note lets you save on the fly, search quickly, and jump back to the original context with one click.
+We love DeepSeek, but sometimes in long conversations, we wish we could **extract key snippets**, **highlight important content**, or **export the entire conversation** for backup.
+
+That's why we built DS Note — a power-up for DeepSeek that lets you save on the fly, search quickly, and jump back to the original context with one click.
 
 ## ✨ Features
 
@@ -40,7 +40,7 @@ When having long conversations with DeepSeek, you may want to **extract key snip
 
 <div align="center">
 
-[![Install from Source](https://img.shields.io/badge/Install_from_Source-black?style=for-the-badge&logo=github)](https://github.com/chenxiachan/deepseek-notes/archive/refs/heads/main.zip)
+[![Install from Source](https://img.shields.io/badge/Install_from_Source-black?style=for-the-badge&logo=github)](https://github.com/chenxiachan/ds-note/archive/refs/heads/main.zip)
 
 </div>
 
@@ -48,7 +48,7 @@ When having long conversations with DeepSeek, you may want to **extract key snip
 2. Open Chrome → `chrome://extensions`
 3. Enable **Developer mode** (top right toggle)
 4. Click **Load unpacked**
-5. Select the `deepseek-notes` folder
+5. Select the `ds-note` folder
 
 ## 🚀 Usage
 
@@ -68,7 +68,7 @@ When having long conversations with DeepSeek, you may want to **extract key snip
 ## 📁 Project Structure
 
 ```
-deepseek-notes/
+ds-note/
 ├── manifest.json        # Extension config
 ├── background.js        # Service worker
 ├── content-script.js    # Save & jump logic
@@ -85,5 +85,7 @@ deepseek-notes/
 <div align="center">
 
 **If you find this useful, please ⭐ star the repo!**
+
+<sub>DS Note is not affiliated with DeepSeek. DeepSeek is a trademark of DeepSeek.</sub>
 
 </div>
