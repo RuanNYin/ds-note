@@ -6,7 +6,6 @@
 
   const SETTINGS_KEY = 'ds_notes_settings';
   const SAVE_BTN_ID = 'ds-notes-selection-btn';
-  let saveButton = null;
   let lang = 'en';
 
   // i18n for content script
@@ -27,7 +26,9 @@
       exported: 'Exported',
       messages: 'messages',
       noSelected: 'No messages selected',
-      scanningConvo: 'Scanning conversation...'
+      scanningConvo: 'Scanning conversation...',
+      copied: 'Copied as Markdown!',
+      copyFail: 'Copy failed'
     },
     zh: {
       save: '📌 保存',
@@ -45,7 +46,9 @@
       exported: '已导出',
       messages: '条消息',
       noSelected: '未选择消息',
-      scanningConvo: '正在扫描对话...'
+      scanningConvo: '正在扫描对话...',
+      copied: '已复制为 Markdown！',
+      copyFail: '复制失败'
     }
   };
 
@@ -69,10 +72,9 @@
   });
 
   function updateAllText() {
-    // Update selection save button
-    if (saveButton) {
-      saveButton.innerHTML = t('save');
-    }
+    // Update selection bar buttons
+    const selSaveBtn = document.getElementById(SAVE_BTN_ID);
+    if (selSaveBtn) selSaveBtn.innerHTML = t('save');
     // Update export bar
     const exportAllBtn = document.getElementById('ds-export-all');
     const exportMdMenu = document.getElementById('ds-export-md');
@@ -90,30 +92,60 @@
 
   loadLang();
 
-  function createSaveButton() {
-    const btn = document.createElement('button');
-    btn.id = SAVE_BTN_ID;
-    btn.innerHTML = t('save');
-    btn.style.cssText = `
+  const SELECTION_BAR_ID = 'ds-notes-selection-bar';
+
+  function createSelectionBar() {
+    const bar = document.createElement('div');
+    bar.id = SELECTION_BAR_ID;
+    bar.style.cssText = `
       position: fixed;
-      padding: 8px 14px;
+      display: none;
+      gap: 4px;
+      z-index: 99999;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    `;
+
+    const btnStyle = `
+      padding: 6px 10px;
       border: none;
-      border-radius: 8px;
-      background: #4CAF50;
+      border-radius: 6px;
       color: white;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 500;
       cursor: pointer;
-      z-index: 99999;
-      display: none;
-      align-items: center;
-      gap: 4px;
       box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      transition: transform 0.1s, background 0.2s;
+      transition: transform 0.1s, opacity 0.2s;
     `;
-    document.body.appendChild(btn);
-    return btn;
+
+    const saveBtn = document.createElement('button');
+    saveBtn.id = SAVE_BTN_ID;
+    saveBtn.innerHTML = t('save');
+    saveBtn.style.cssText = btnStyle + 'background: #4CAF50;';
+
+    const copyBtn = document.createElement('button');
+    copyBtn.id = 'ds-notes-copy-md-btn';
+    copyBtn.innerHTML = '📋 Markdown';
+    copyBtn.style.cssText = btnStyle + 'background: #2563eb;';
+
+    [saveBtn, copyBtn].forEach(btn => {
+      btn.addEventListener('mouseenter', () => { btn.style.transform = 'scale(1.05)'; });
+      btn.addEventListener('mouseleave', () => { btn.style.transform = 'scale(1)'; });
+    });
+
+    saveBtn.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      saveSelectedText();
+    });
+
+    copyBtn.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      copySelectionAsMarkdown();
+    });
+
+    bar.appendChild(saveBtn);
+    bar.appendChild(copyBtn);
+    document.body.appendChild(bar);
+    return bar;
   }
 
   function getMessageRole() {
@@ -131,11 +163,21 @@
     return 'assistant';
   }
 
+  function getSelectionHtml() {
+    const selection = window.getSelection();
+    if (!selection.rangeCount) return '';
+    const container = document.createElement('div');
+    for (let i = 0; i < selection.rangeCount; i++) {
+      container.appendChild(selection.getRangeAt(i).cloneContents());
+    }
+    return container;
+  }
+
   function saveSelectedText() {
     const selection = window.getSelection();
-    const text = selection.toString().trim();
+    const plainText = selection.toString().trim();
 
-    if (!text) return;
+    if (!plainText) return;
 
     // Find the .ds-message element containing the selection
     let messageEl = null;
@@ -147,6 +189,10 @@
       }
       node = node.parentElement;
     }
+
+    // Extract as markdown from HTML fragment
+    const htmlFragment = getSelectionHtml();
+    const content = htmlToMarkdown(htmlFragment) || plainText;
 
     const role = messageEl ? getMessageRoleFromElement(messageEl) : 'assistant';
 
@@ -168,8 +214,8 @@
 
     const message = {
       id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      content: text,
-      searchText: messageEl?.innerText?.trim().slice(0, 150) || text.slice(0, 150),
+      content: content,
+      searchText: messageEl?.innerText?.trim().slice(0, 150) || plainText.slice(0, 150),
       userMessageText: userMessageText,
       role: role,
       conversationUrl: window.location.href,
@@ -215,40 +261,29 @@
     setTimeout(() => toast.remove(), 2000);
   }
 
+  let selectionBar = null;
+
   function showButton(x, y) {
-    if (!saveButton) {
-      saveButton = createSaveButton();
-      saveButton.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        saveSelectedText();
-      });
-      saveButton.addEventListener('mouseenter', () => {
-        saveButton.style.transform = 'scale(1.05)';
-      });
-      saveButton.addEventListener('mouseleave', () => {
-        saveButton.style.transform = 'scale(1)';
-      });
+    if (!selectionBar) {
+      selectionBar = createSelectionBar();
     }
 
-    // Position button above selection
-    const btnWidth = 80;
-    const btnHeight = 36;
-    let posX = x - btnWidth / 2;
-    let posY = y - btnHeight - 10;
+    const barWidth = 200;
+    const barHeight = 32;
+    let posX = x - barWidth / 2;
+    let posY = y - barHeight - 10;
 
-    // Keep within viewport
-    posX = Math.max(10, Math.min(posX, window.innerWidth - btnWidth - 10));
+    posX = Math.max(10, Math.min(posX, window.innerWidth - barWidth - 10));
     posY = Math.max(10, posY);
 
-    saveButton.style.left = posX + 'px';
-    saveButton.style.top = posY + 'px';
-    saveButton.style.display = 'flex';
+    selectionBar.style.left = posX + 'px';
+    selectionBar.style.top = posY + 'px';
+    selectionBar.style.display = 'flex';
   }
 
   function hideButton() {
-    if (saveButton) {
-      saveButton.style.display = 'none';
+    if (selectionBar) {
+      selectionBar.style.display = 'none';
     }
   }
 
@@ -272,19 +307,21 @@
     showButton(x, y);
   }
 
+  function isSelectionBarClick(target) {
+    return target.closest && target.closest(`#${SELECTION_BAR_ID}`);
+  }
+
   // Listen for mouse up (end of selection)
   document.addEventListener('mouseup', (e) => {
-    // Delay to let selection complete
     setTimeout(() => {
-      // Don't trigger if clicking the save button
-      if (e.target.id === SAVE_BTN_ID) return;
+      if (isSelectionBarClick(e.target)) return;
       handleSelectionChange();
     }, 10);
   });
 
   // Hide button when clicking elsewhere
   document.addEventListener('mousedown', (e) => {
-    if (e.target.id !== SAVE_BTN_ID) {
+    if (!isSelectionBarClick(e.target)) {
       hideButton();
     }
   });
@@ -304,15 +341,12 @@
   const MSG_BTN_CLASS = 'ds-notes-msg-btn';
   const PROCESSED_ATTR = 'data-ds-notes-processed';
 
-  function createMsgSaveButton(messageEl) {
+  function createMsgButton(emoji, title, bgColor, onClick) {
     const btn = document.createElement('button');
     btn.className = MSG_BTN_CLASS;
-    btn.innerHTML = '📌';
-    btn.title = 'Save to Notes';
+    btn.innerHTML = emoji;
+    btn.title = title;
     btn.style.cssText = `
-      position: absolute !important;
-      bottom: 4px !important;
-      right: 4px !important;
       width: 26px;
       height: 26px;
       padding: 0;
@@ -328,11 +362,10 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 10;
     `;
 
     btn.addEventListener('mouseenter', () => {
-      btn.style.background = '#4CAF50';
+      btn.style.background = bgColor;
       btn.style.opacity = '1';
       btn.style.transform = 'scale(1.05)';
     });
@@ -345,10 +378,41 @@
     btn.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      saveMessageContent(messageEl, btn);
+      onClick(btn);
     });
 
     return btn;
+  }
+
+  function createMsgSaveButton(messageEl) {
+    const btn = createMsgButton('📌', 'Save to Notes', '#4CAF50', (b) => {
+      saveMessageContent(messageEl, b);
+    });
+    btn.style.cssText += `
+      position: absolute !important;
+      bottom: 4px !important;
+      right: 4px !important;
+      z-index: 10;
+    `;
+    return btn;
+  }
+
+  async function copySelectionAsMarkdown() {
+    const selection = window.getSelection();
+    const plainText = selection.toString().trim();
+    if (!plainText) return;
+
+    const htmlFragment = getSelectionHtml();
+    const content = htmlToMarkdown(htmlFragment) || plainText;
+
+    try {
+      await navigator.clipboard.writeText(content);
+      showToast(t('copied'));
+      hideButton();
+      selection.removeAllRanges();
+    } catch (e) {
+      showToast(t('copyFail'), true);
+    }
   }
 
   // Detect role by checking message content patterns
@@ -393,27 +457,103 @@
     return el.querySelector('.ds-markdown') ? 'assistant' : 'user';
   }
 
-  // Extract text with LaTeX preserved
-  function extractTextWithLatex(el) {
+  function htmlToMarkdown(el) {
     if (!el) return '';
-
-    // Clone to avoid modifying original
     const clone = el.cloneNode(true);
 
-    // Find all KaTeX elements and replace with LaTeX source
-    clone.querySelectorAll('.katex').forEach(katex => {
-      const annotation = katex.querySelector('annotation[encoding="application/x-tex"]');
-      if (annotation) {
-        const latex = annotation.textContent;
-        // Check if it's display math (block) or inline
-        const isBlock = katex.parentElement?.classList.contains('katex-display');
-        const replacement = isBlock ? `$$${latex}$$` : `$${latex}$`;
-        katex.replaceWith(replacement);
-      }
-    });
+    // Remove thinking/collapsed sections
+    clone.querySelectorAll('.ds-thinking, .ds-collapse').forEach(e => e.remove());
 
-    return clone.innerText.trim();
+    function convert(node) {
+      if (node.nodeType === 3) return node.textContent;
+      if (node.nodeType !== 1) return '';
+
+      const tag = node.tagName.toLowerCase();
+
+      // KaTeX math
+      if (node.classList?.contains('katex')) {
+        const ann = node.querySelector('annotation[encoding="application/x-tex"]');
+        if (ann) {
+          const isBlock = node.parentElement?.classList.contains('katex-display');
+          return isBlock ? `$$${ann.textContent}$$` : `$${ann.textContent}$`;
+        }
+      }
+
+      const children = Array.from(node.childNodes).map(convert).join('');
+
+      switch (tag) {
+        case 'h1': return `\n# ${children.trim()}\n\n`;
+        case 'h2': return `\n## ${children.trim()}\n\n`;
+        case 'h3': return `\n### ${children.trim()}\n\n`;
+        case 'h4': return `\n#### ${children.trim()}\n\n`;
+        case 'strong': case 'b': return `**${children}**`;
+        case 'em': case 'i': return `*${children}*`;
+        case 'del': case 's': return `~~${children}~~`;
+        case 'code':
+          if (node.parentElement?.tagName.toLowerCase() === 'pre') return children;
+          return `\`${children}\``;
+        case 'pre': {
+          const codeEl = node.querySelector('code');
+          const langClass = codeEl?.className?.match(/language-(\w+)/);
+          const langStr = langClass ? langClass[1] : '';
+          const codeText = codeEl ? codeEl.textContent : children;
+          return `\n\`\`\`${langStr}\n${codeText.trimEnd()}\n\`\`\`\n\n`;
+        }
+        case 'a': {
+          const href = node.getAttribute('href');
+          return href ? `[${children}](${href})` : children;
+        }
+        case 'br': return '\n';
+        case 'hr': return '\n---\n\n';
+        case 'p': return `${children.trim()}\n\n`;
+        case 'blockquote': {
+          const lines = children.trim().split('\n').map(l => `> ${l}`).join('\n');
+          return `\n${lines}\n\n`;
+        }
+        case 'ul': return `\n${children}\n`;
+        case 'ol': return `\n${children}\n`;
+        case 'li': {
+          const parent = node.parentElement;
+          const prefix = parent?.tagName.toLowerCase() === 'ol'
+            ? `${Array.from(parent.children).indexOf(node) + 1}. `
+            : '- ';
+          return `${prefix}${children.trim()}\n`;
+        }
+        case 'table': {
+          const rows = node.querySelectorAll('tr');
+          if (!rows.length) return children;
+          let md = '\n';
+          rows.forEach((row, ri) => {
+            const cells = row.querySelectorAll('th, td');
+            const line = Array.from(cells).map(c => convert(c).trim()).join(' | ');
+            md += `| ${line} |\n`;
+            if (ri === 0) {
+              md += `| ${Array.from(cells).map(() => '---').join(' | ')} |\n`;
+            }
+          });
+          return md + '\n';
+        }
+        case 'th': case 'td': return children;
+        case 'img': {
+          const alt = node.getAttribute('alt') || '';
+          const src = node.getAttribute('src') || '';
+          return `![${alt}](${src})`;
+        }
+        case 'div': case 'span': case 'section':
+          return children;
+        default:
+          return children;
+      }
+    }
+
+    let result = convert(clone);
+    // Clean up excessive newlines
+    result = result.replace(/\n{3,}/g, '\n\n').trim();
+    return result;
   }
+
+  // Backward compat alias
+  const extractTextWithLatex = htmlToMarkdown;
 
   // Find the preceding user message for an AI reply
   function findPrecedingUserMessage(messageEl) {
@@ -437,8 +577,9 @@
   }
 
   function saveMessageContent(messageEl, btn) {
-    const markdown = messageEl.querySelector('.ds-markdown');
-    const content = markdown ? extractTextWithLatex(markdown) : messageEl.innerText.trim();
+    const markdowns = messageEl.querySelectorAll('.ds-markdown');
+    const markdown = markdowns.length > 0 ? markdowns[markdowns.length - 1] : null;
+    const content = markdown ? htmlToMarkdown(markdown) : messageEl.innerText.trim();
     // Keep raw text for search (without LaTeX conversion)
     const rawText = messageEl.innerText.trim();
 
@@ -497,29 +638,21 @@
   }
 
   function addSaveButtonsToMessages() {
-    // Use stable selector: .ds-message contains each message
     const messageEls = document.querySelectorAll('.ds-message');
 
     messageEls.forEach(el => {
       if (el.hasAttribute(PROCESSED_ATTR)) return;
 
-      // Must have markdown content
       const markdown = el.querySelector('.ds-markdown');
       if (!markdown) return;
 
-      // Get text content
       const content = markdown.innerText.trim();
       if (content.length < 10) return;
 
-      // Skip if already has our button
       if (el.querySelector(`.${MSG_BTN_CLASS}`)) return;
 
       el.setAttribute(PROCESSED_ATTR, 'true');
-
-      // Make container position relative for absolute button
       el.style.setProperty('position', 'relative', 'important');
-
-      // Append button directly (absolute positioned)
       el.appendChild(createMsgSaveButton(el));
     });
   }

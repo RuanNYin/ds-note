@@ -27,7 +27,7 @@ DS Note is built for exactly this — **extract key snippets**, **highlight impo
 | | Feature | Description |
 |---|---------|-------------|
 | 📌 | **Save Messages** | Pin entire messages or highlight text to save |
-| 📋 | **Side Panel** | View and manage all notes in a sidebar |
+| 📋 | **Copy as Markdown** | Select text → copy as clean Markdown with LaTeX formulas preserved |
 | ↗️ | **Jump to Original** | Navigate back to the original message instantly |
 | 🕐 | **Timeline Navigation** | Precise jumping in long conversations |
 | 🔍 | **Search & Filter** | Search notes, filter by conversation or starred |
@@ -54,7 +54,7 @@ DS Note is built for exactly this — **extract key snippets**, **highlight impo
 
 1. Go to [chat.deepseek.com](https://chat.deepseek.com)
 2. **Save entire message**: Click the 📌 button at the bottom-right of any message
-3. **Save selected text**: Highlight text → click the save button that appears
+3. **Save selected text**: Highlight text → click 📌 to save or 📋 to copy as Markdown
 4. Click the extension icon to open the notes panel
 5. Click ↗️ on any note to jump back to the original message
 
