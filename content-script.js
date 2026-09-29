@@ -7,6 +7,7 @@
   const SETTINGS_KEY = 'ds_notes_settings';
   const SAVE_BTN_ID = 'ds-notes-selection-btn';
   let lang = 'en';
+  let selectionPopup = true; // show save/markdown bar on text selection
 
   // i18n for content script
   const i18n = {
@@ -56,18 +57,26 @@
     return i18n[lang][key] || i18n.en[key] || key;
   }
 
-  // Load language setting
-  async function loadLang() {
+  // Load language + selection popup settings
+  async function loadSettings() {
     const r = await chrome.storage.local.get([SETTINGS_KEY]);
-    lang = r[SETTINGS_KEY]?.lang || 'en';
+    const s = r[SETTINGS_KEY] || {};
+    lang = s.lang || 'en';
+    selectionPopup = s.selectionPopup !== false;
     updateAllText();
   }
 
-  // Listen for language changes
+  // React to setting changes from the side panel
   chrome.storage.onChanged.addListener((changes) => {
-    if (changes[SETTINGS_KEY]?.newValue?.lang) {
-      lang = changes[SETTINGS_KEY].newValue.lang;
+    const s = changes[SETTINGS_KEY]?.newValue;
+    if (!s) return;
+    if (s.lang) {
+      lang = s.lang;
       updateAllText();
+    }
+    if ('selectionPopup' in s) {
+      selectionPopup = s.selectionPopup !== false;
+      if (!selectionPopup) hideButton();
     }
   });
 
@@ -90,7 +99,7 @@
     if (exportSelected) exportSelected.textContent = `${t('selected')} (${selectedMsgIds.size})`;
   }
 
-  loadLang();
+  loadSettings();
 
   const SELECTION_BAR_ID = 'ds-notes-selection-bar';
 
@@ -215,10 +224,12 @@
     const message = {
       id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       content: content,
+      selectionText: (selectionTextFromDom(messageEl) || norm(plainText)).slice(0, 1000),
       searchText: messageEl?.innerText?.trim().slice(0, 150) || plainText.slice(0, 150),
       userMessageText: userMessageText,
       role: role,
       conversationUrl: window.location.href,
+      conversationTitle: document.title || null,
       scrollRatio: scrollRatio,
       savedAt: Date.now()
     };
@@ -288,6 +299,11 @@
   }
 
   function handleSelectionChange() {
+    if (!selectionPopup) {
+      hideButton();
+      return;
+    }
+
     const selection = window.getSelection();
     const text = selection.toString().trim();
 
@@ -609,10 +625,12 @@
     const message = {
       id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       content: content,
+      selectionText: null, // whole-message save: the note covers the entire message
       searchText: rawText.slice(0, 150),
       userMessageText: userMessageText, // For timeline search
       role: role,
       conversationUrl: window.location.href,
+      conversationTitle: document.title || null,
       scrollRatio: scrollRatio,
       savedAt: Date.now()
     };
@@ -967,6 +985,23 @@
     return lines.join('\n');
   }
 
+  // Filename helpers — keep names unique and readable across all export paths
+  function slugify(s) {
+    return (s || '')
+      .replace(/[\x00-\x1f\\/:*?"<>|]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 60)
+      .replace(/[.\s]+$/, '');
+  }
+
+  function stamp(withTime) {
+    const d = new Date();
+    const p = n => String(n).padStart(2, '0');
+    const day = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
+    return withTime ? `${day}-${p(d.getHours())}${p(d.getMinutes())}` : day;
+  }
+
   function downloadFile(content, filename, mimeType) {
     const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
@@ -1056,14 +1091,14 @@
       }
 
       const title = document.title || 'DeepSeek Conversation';
-      const dateStr = new Date().toISOString().slice(0,10);
+      const base = `${slugify(title) || 'deepseek'}-${stamp(true)}`;
 
       if (format === 'jsonl') {
         const jsonl = messagesToJsonl(messages, title);
-        downloadFile(jsonl, `deepseek-${dateStr}.jsonl`, 'application/jsonl');
+        downloadFile(jsonl, `${base}.jsonl`, 'application/jsonl');
       } else {
         const md = messagesToMd(messages, title);
-        downloadFile(md, `deepseek-${dateStr}.md`, 'text/markdown');
+        downloadFile(md, `${base}.md`, 'text/markdown');
       }
 
       showToast(`${t('exported')} ${messages.length} ${t('messages')}`);
@@ -1080,7 +1115,7 @@
     }
     const messages = extractConversation(true);
     const md = messagesToMd(messages, 'Selected Messages');
-    downloadFile(md, `deepseek-selected-${new Date().toISOString().slice(0,10)}.md`, 'text/markdown');
+    downloadFile(md, `${slugify(document.title) || 'deepseek'}-selected-${stamp(true)}.md`, 'text/markdown');
     showToast(`${t('exported')} ${messages.length} ${t('messages')}`);
 
     // Exit select mode
@@ -1211,7 +1246,7 @@
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'scrollToMessage') {
-      const { scrollRatio, contentPreview, userMessageText } = request;
+      const { scrollRatio, contentPreview, userMessageText, selectionText } = request;
 
       (async () => {
         // For AI replies, use userMessageText for timeline search
@@ -1228,7 +1263,7 @@
           const cleanSearch = searchText.slice(0, 30).replace(/[^\w\u4e00-\u9fff\s]/g, '').trim();
           const found = findMessageByText(cleanSearch);
           if (found) {
-            highlightElement(found);
+            focusNote(found, selectionText);
           }
           sendResponse({ success: true });
           return;
@@ -1252,8 +1287,7 @@
         }
 
         if (found) {
-          found.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          highlightElement(found);
+          focusNote(found, selectionText);
           sendResponse({ success: true });
         } else {
           sendResponse({ success: false });
@@ -1278,14 +1312,208 @@
     return null;
   }
 
-  function highlightElement(el) {
-    const originalBg = el.style.backgroundColor;
-    el.style.backgroundColor = '#f59e0b';
-    el.style.transition = 'background-color 0.3s';
-    setTimeout(() => {
-      el.style.backgroundColor = originalBg;
-    }, 2000);
+  // === Highlight the noted text after jumping back ===
+  const HL_HOLD_MS = 1200;
+  const HL_NAMES = ['ds-notes-light', 'ds-notes-dark'];
+  let hlTimers = [];
+
+  function supportsHighlightApi() {
+    return typeof CSS !== 'undefined' && !!CSS.highlights && typeof Highlight !== 'undefined';
   }
+
+  // Detect the page theme from the body background luminance
+  function isDarkPage() {
+    const bg = getComputedStyle(document.body).backgroundColor || '';
+    const m = bg.match(/[\d.]+/g);
+    if (!m || m.length < 3) return true;
+    const [r, g, b] = m.slice(0, 3).map(Number);
+    return 0.299 * r + 0.587 * g + 0.114 * b < 128;
+  }
+
+  function clearHighlight() {
+    hlTimers.forEach(clearTimeout);
+    hlTimers = [];
+    if (supportsHighlightApi()) HL_NAMES.forEach(n => CSS.highlights.delete(n));
+    document.querySelectorAll('.ds-notes-hl-fallback').forEach(el => {
+      el.style.backgroundColor = el.dataset.dsHlBg || '';
+      el.classList.remove('ds-notes-hl-fallback');
+      delete el.dataset.dsHlBg;
+    });
+  }
+
+  function showHighlight(target) {
+    clearHighlight();
+    if (target instanceof Range && supportsHighlightApi()) {
+      const name = isDarkPage() ? 'ds-notes-dark' : 'ds-notes-light';
+      CSS.highlights.set(name, new Highlight(target));
+    } else if (target instanceof Element) {
+      target.dataset.dsHlBg = target.style.backgroundColor || '';
+      target.style.backgroundColor = isDarkPage() ? '#92400e' : '#fde68a';
+      target.classList.add('ds-notes-hl-fallback');
+    }
+    hlTimers.push(setTimeout(clearHighlight, HL_HOLD_MS));
+  }
+
+  // Locate `needle` inside `root` as a Range, without mutating the DOM
+  const BLOCK_DISPLAYS = new Set([
+    'block', 'flow-root', 'list-item', 'table', 'table-row', 'table-row-group',
+    'table-header-group', 'table-footer-group', 'table-cell', 'table-caption',
+    'flex', 'grid'
+  ]);
+
+  // Nearest block-level ancestor of a text node (cached per parent element)
+  function blockAncestor(node, root, cache) {
+    const parent = node.parentElement;
+    if (!parent) return root;
+    const cached = cache.get(parent);
+    if (cached) return cached;
+    let el = parent;
+    let found = root;
+    while (el && el !== root) {
+      if (BLOCK_DISPLAYS.has(getComputedStyle(el).display)) { found = el; break; }
+      el = el.parentElement;
+    }
+    cache.set(parent, found);
+    return found;
+  }
+
+  const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+
+  // Flatten `root`'s text into one string with a separator at every block
+  // boundary, plus a map from string index -> { node, offset }.
+  // Both the saved selection text and the jump-time search use this, so they
+  // stay consistent even when the DOM holds duplicated or hidden nodes
+  // (KaTeX renders each formula twice) or <br> (which adds no text node).
+  function flattenText(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    const blocks = new Map();
+    let combined = '';
+    const map = []; // map[i] -> { node, offset } for combined[i]
+    let block = null;
+    let lastNode = null;
+    let node;
+    while ((node = walker.nextNode())) {
+      if (!node.nodeValue) continue;
+      const b = blockAncestor(node, root, blocks);
+      if (block !== null && b !== block) {
+        combined += '\n';
+        map.push({ node: lastNode, offset: lastNode.nodeValue.length });
+      }
+      block = b;
+      lastNode = node;
+      for (let i = 0; i < node.nodeValue.length; i++) {
+        combined += node.nodeValue[i];
+        map.push({ node, offset: i });
+      }
+    }
+    return { combined, map, lastNode };
+  }
+
+  // Read the note's selection text from the DOM using the same flattening as
+  // jump time, instead of Selection.toString() (whose rendering differs).
+  function selectionTextFromDom(messageEl) {
+    const sel = window.getSelection();
+    if (!messageEl || !sel || !sel.rangeCount) return null;
+    const { combined, map } = flattenText(messageEl);
+    if (!combined) return null;
+
+    const nodeStart = new Map();
+    for (let i = 0; i < map.length; i++) {
+      if (!nodeStart.has(map[i].node)) nodeStart.set(map[i].node, i - map[i].offset);
+    }
+    const toIndex = (n, off) => {
+      const start = nodeStart.get(n);
+      return start === undefined ? -1 : start + off;
+    };
+
+    const range = sel.getRangeAt(0);
+    const a = toIndex(range.startContainer, range.startOffset);
+    const b = toIndex(range.endContainer, range.endOffset);
+    if (a < 0 || b < 0 || b <= a) return null;
+    return norm(combined.slice(a, b));
+  }
+
+  function findTextRange(root, needle) {
+    const target = norm(needle);
+    if (target.length < 2) return null;
+
+    const { combined, map, lastNode } = flattenText(root);
+    if (!combined) return null;
+
+    // Whitespace-normalized view of `combined`, plus a map back into it
+    let normText = '';
+    const normMap = [];
+    let prevSpace = false;
+    for (let i = 0; i < combined.length; i++) {
+      const ch = combined[i];
+      if (/\s/.test(ch)) {
+        if (prevSpace) continue;
+        prevSpace = true;
+        normText += ' ';
+      } else {
+        prevSpace = false;
+        normText += ch;
+      }
+      normMap.push(i);
+    }
+
+    let hit = normText.indexOf(target);
+    let hitLen = target.length;
+    if (hit === -1) {
+      // The full string did not match; shrink to the longest matching prefix so
+      // we still highlight a meaningful leading chunk rather than a fragment.
+      let k = Math.floor(target.length * 0.75);
+      while (k > 5) {
+        hit = normText.indexOf(target.slice(0, k));
+        if (hit !== -1) { hitLen = k; break; }
+        k = Math.floor(k * 0.75);
+      }
+      if (hit === -1) return null;
+    }
+
+    const start = map[normMap[hit]];
+    const endIdx = normMap[hit + hitLen - 1] + 1;
+    const end = map[endIdx] || { node: lastNode, offset: lastNode.nodeValue.length };
+    if (!start || !end) return null;
+
+    try {
+      const range = document.createRange();
+      range.setStart(start.node, start.offset);
+      range.setEnd(end.node, end.offset);
+      return range;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Center the given range within the conversation scroll container
+  function scrollToRange(range) {
+    const container = document.querySelector('.ds-virtual-list');
+    if (!container) {
+      range.startContainer.parentElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    const rect = range.getBoundingClientRect();
+    const crect = container.getBoundingClientRect();
+    const top = container.scrollTop + (rect.top - crect.top) - (crect.height - rect.height) / 2;
+    container.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  }
+
+  // Bring the noted text into view and flash-highlight just that text
+  function focusNote(messageEl, selectionText) {
+    const range = selectionText ? findTextRange(messageEl, selectionText) : null;
+    if (range) {
+      scrollToRange(range);
+      showHighlight(range);
+    } else {
+      messageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      showHighlight(messageEl);
+    }
+  }
+
+  // Drop the highlight as soon as the page is hidden, so a throttled timer
+  // can never leave it stuck on screen
+  document.addEventListener('visibilitychange', clearHighlight);
 
   function sleep(ms) {
     return new Promise(r => setTimeout(r, ms));

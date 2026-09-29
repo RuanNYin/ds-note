@@ -11,3 +11,14 @@
   85% { opacity: 1; transform: translateY(0); }
   100% { opacity: 0; transform: translateY(-10px); }
 }
+
+/* Flash-highlight for the noted text after jumping back (CSS Custom Highlight API) */
+::highlight(ds-notes-light) {
+  background-color: #fde68a;
+  color: inherit;
+}
+
+::highlight(ds-notes-dark) {
+  background-color: #92400e;
+  color: inherit;
+}

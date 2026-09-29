@@ -96,6 +96,10 @@ header {
   background: var(--bg-hover);
 }
 
+.icon-btn.off {
+  opacity: 0.35;
+}
+
 /* Search Bar */
 .search-bar {
   position: relative;
@@ -347,6 +351,7 @@ h1 {
 /* Notes List */
 .notes-list {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -357,6 +362,7 @@ h1 {
   text-align: center;
   padding: 48px 20px;
   color: var(--text-dimmed);
+  flex-shrink: 0;
 }
 
 .empty-icon {
@@ -376,6 +382,9 @@ h1 {
   background: var(--bg-card);
   border-radius: 8px;
   overflow: hidden;
+  /* Keep the group at its natural height so the list overflows and scrolls,
+     instead of the group being squashed and clipping its own cards */
+  flex-shrink: 0;
 }
 
 .convo-header {
@@ -388,10 +397,71 @@ h1 {
   align-items: center;
 }
 
+/* Collapsible group label: chevron + conversation id + name */
+.convo-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.convo-toggle {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dimmed);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.convo-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.convo-id,
+.convo-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.convo-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-secondary);
+}
+
+.convo-id {
+  flex-shrink: 0;
+  color: var(--text-dimmed);
+  font-size: 12px;
+}
+
+/* Dot separator, only when a title precedes the id */
+.convo-title + .convo-id::before {
+  content: '·';
+  margin-right: 6px;
+  color: var(--text-dimmed);
+}
+
+.convo-group.collapsed .note-card {
+  display: none;
+}
+
 .convo-actions {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex-shrink: 0;
 }
 
 .convo-actions .count {
@@ -543,7 +613,7 @@ body.light .star-btn.active {
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 100px;
-  overflow-y: auto;
+  overflow: hidden;
   line-height: 1.5;
 }
 

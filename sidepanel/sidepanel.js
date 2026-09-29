@@ -15,6 +15,7 @@ const i18n = {
     export: 'Export ▼',
     clear: 'Clear',
     selectAll: 'Select All',
+    deselectAll: 'Deselect All',
     copy: 'Copy',
     exportSel: 'Export',
     formatLabel: 'FORMAT',
@@ -43,7 +44,11 @@ const i18n = {
     justNow: 'now',
     mAgo: 'm',
     hAgo: 'h',
-    jumpTo: 'Jump to original'
+    jumpTo: 'Jump to original',
+    selPopupOn: 'Selection popup: on',
+    selPopupOff: 'Selection popup: off',
+    collapse: 'Collapse',
+    expand: 'Expand'
   },
   zh: {
     title: 'DS Note',
@@ -55,6 +60,7 @@ const i18n = {
     export: '导出 ▼',
     clear: '清空',
     selectAll: '全选',
+    deselectAll: '取消全选',
     copy: '复制',
     exportSel: '导出',
     formatLabel: '格式',
@@ -83,7 +89,11 @@ const i18n = {
     justNow: '刚刚',
     mAgo: '分钟前',
     hAgo: '小时前',
-    jumpTo: '跳转到原文'
+    jumpTo: '跳转到原文',
+    selPopupOn: '选中弹窗：开',
+    selPopupOff: '选中弹窗：关',
+    collapse: '收起',
+    expand: '展开'
   }
 };
 
@@ -91,11 +101,14 @@ let lang = 'en';
 let theme = 'dark'; // 'dark' or 'light'
 let view = 'current';
 let tabUrl = '';
+let tabTitle = '';
 let messages = [];
 let selectMode = false;
 let selected = new Set();
+let collapsedConvos = new Set();
 let searchQuery = '';
 let exportFormat = 'md'; // 'md' or 'jsonl'
+let selectionPopup = true; // show save/markdown bar on text selection
 
 const $ = id => document.getElementById(id);
 
@@ -124,6 +137,13 @@ function updateAllText() {
   $('copyCurrent').textContent = t('copyCurrent');
   $('searchInput').placeholder = t('searchPlaceholder');
   $('langBtn').textContent = t('langBtn');
+  applySelPopup();
+}
+
+function applySelPopup() {
+  const btn = $('selPopupBtn');
+  btn.classList.toggle('off', !selectionPopup);
+  btn.title = selectionPopup ? t('selPopupOn') : t('selPopupOff');
 }
 
 function formatTime(ts) {
@@ -191,7 +211,8 @@ async function jumpToOriginal(note) {
       await chrome.tabs.sendMessage(targetTab.id, {
         action: 'scrollToMessage',
         scrollRatio: note.scrollRatio ?? -1,
-        contentPreview: note.searchText || note.content.slice(0, 100)
+        contentPreview: note.searchText || note.content.slice(0, 100),
+        selectionText: note.selectionText || null
       });
     } catch (e) {}
   } else if (tabs.length > 0) {
@@ -204,7 +225,8 @@ async function jumpToOriginal(note) {
           action: 'scrollToMessage',
           scrollRatio: note.scrollRatio ?? -1,
           contentPreview: note.searchText || note.content.slice(0, 100),
-          userMessageText: note.userMessageText || null
+          userMessageText: note.userMessageText || null,
+          selectionText: note.selectionText || null
         });
       } catch (e) {}
     }, 2000);
@@ -295,6 +317,8 @@ function render() {
   selBar.className = 'selection-bar' + (selectMode ? ' active' : '');
   $('selCount').textContent = `(${selected.size})`;
   $('clearSearch').style.display = searchQuery ? 'block' : 'none';
+  $('selectAllBtn').textContent =
+    filtered.length > 0 && filtered.every(m => selected.has(m.id)) ? t('deselectAll') : t('selectAll');
 
   if (!filtered.length) {
     const emptyMsg = searchQuery ? t('noResults') : t('emptyText');
@@ -316,13 +340,19 @@ function render() {
   } else {
     const groups = groupByConvo(filtered);
     Object.entries(groups).forEach(([cid, g]) => {
+      const isCollapsed = collapsedConvos.has(cid);
       const grp = document.createElement('div');
-      grp.className = 'convo-group';
+      grp.className = 'convo-group' + (isCollapsed ? ' collapsed' : '');
 
+      const name = convoDisplayName(g.notes, cid);
       const hdr = document.createElement('div');
       hdr.className = 'convo-header';
       hdr.innerHTML = `
-        <span title="${esc(g.url)}">${shortId(g.url)}</span>
+        <div class="convo-label" title="${esc(g.url)}">
+          <button class="convo-toggle" title="${t(isCollapsed ? 'expand' : 'collapse')}" aria-expanded="${!isCollapsed}">${isCollapsed ? '▸' : '▾'}</button>
+          ${name ? `<span class="convo-title" title="${esc(name)}">${esc(name)}</span>` : ''}
+          <span class="convo-id">${shortId(g.url)}</span>
+        </div>
         <div class="convo-actions">
           <span class="count">${g.notes.length}</span>
           <button class="convo-btn" title="Copy">📋</button>
@@ -330,9 +360,26 @@ function render() {
         </div>
       `;
 
+      const toggle = hdr.querySelector('.convo-toggle');
+      const label = hdr.querySelector('.convo-label');
+      label.onclick = () => {
+        let nowCollapsed;
+        if (collapsedConvos.has(cid)) {
+          collapsedConvos.delete(cid);
+          nowCollapsed = false;
+        } else {
+          collapsedConvos.add(cid);
+          nowCollapsed = true;
+        }
+        grp.classList.toggle('collapsed', nowCollapsed);
+        toggle.textContent = nowCollapsed ? '▸' : '▾';
+        toggle.setAttribute('aria-expanded', String(!nowCollapsed));
+        toggle.title = t(nowCollapsed ? 'expand' : 'collapse');
+      };
+
       const btns = hdr.querySelectorAll('.convo-btn');
       btns[0].onclick = () => copyText(toPlain(g.notes));
-      btns[1].onclick = () => download(toMd(g.notes, cid), `deepseek-${cid.slice(0,8)}.md`);
+      btns[1].onclick = () => download(toMd(g.notes, convoDisplayName(g.notes, cid) || cid), `${convoFileBase(g.notes, cid)}.md`);
 
       grp.appendChild(hdr);
       g.notes.forEach(n => grp.appendChild(createCard(n)));
@@ -353,12 +400,19 @@ async function loadSettings() {
   const r = await chrome.storage.local.get([SETTINGS_KEY]);
   lang = r[SETTINGS_KEY]?.lang || 'en';
   theme = r[SETTINGS_KEY]?.theme || 'dark';
+  selectionPopup = r[SETTINGS_KEY]?.selectionPopup ?? true;
   applyTheme();
   updateAllText();
 }
 
 function saveSettings() {
-  chrome.storage.local.set({ [SETTINGS_KEY]: { lang, theme } });
+  chrome.storage.local.set({ [SETTINGS_KEY]: { lang, theme, selectionPopup } });
+}
+
+function toggleSelPopup() {
+  selectionPopup = !selectionPopup;
+  saveSettings();
+  applySelPopup();
 }
 
 function saveLang(l) {
@@ -379,16 +433,29 @@ function toggleTheme() {
   saveSettings();
 }
 
-async function getTabUrl() {
+async function refreshTabUrl() {
+  let nextUrl = '';
+  let nextTitle = '';
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.url?.includes('chat.deepseek.com')) {
-      tabUrl = tab.url;
-      $('currentUrl').textContent = shortId(tabUrl);
-      $('currentUrl').title = tabUrl;
+      nextUrl = tab.url;
+      nextTitle = tab.title || '';
     }
   } catch {}
+  if (nextUrl === tabUrl && nextTitle === tabTitle) return;
+  tabUrl = nextUrl;
+  tabTitle = nextTitle;
+  $('currentUrl').textContent = tabUrl ? shortId(tabUrl) : '';
+  $('currentUrl').title = tabUrl;
+  render();
 }
+
+// Keep the "Current" view in sync when the conversation or active tab changes
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.url || changeInfo.title || changeInfo.status === 'complete') refreshTabUrl();
+});
+chrome.tabs.onActivated.addListener(() => refreshTabUrl());
 
 function toPlain(msgs) {
   return msgs.map(m => `[${t(m.role)}]\n${m.content}`).join('\n\n---\n\n');
@@ -420,6 +487,47 @@ function download(content, name, mimeType = 'text/markdown') {
   a.href = URL.createObjectURL(new Blob([content], { type: mimeType }));
   a.download = name;
   a.click();
+}
+
+// Filename helpers — keep names unique and readable across all export paths
+function slugify(s) {
+  return (s || '')
+    .replace(/[\x00-\x1f\\/:*?"<>|]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60)
+    .replace(/[.\s]+$/, '');
+}
+
+function stamp(withTime) {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  const day = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
+  return withTime ? `${day}-${p(d.getHours())}${p(d.getMinutes())}` : day;
+}
+
+// Strip DeepSeek's tab-title suffix and treat the bare product name as "no title"
+function cleanTitle(s) {
+  const t = (s || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\s*[|\-–—]\s*DeepSeek\s*$/i, '')
+    .trim();
+  return t && !/^deepseek$/i.test(t) ? t : null;
+}
+
+// Display name for a conversation: stored title, else the live tab title when
+// this is the conversation currently open, else null (callers fall back to the id)
+function convoDisplayName(notes, cid) {
+  const stored = cleanTitle(notes.find(n => n.conversationTitle)?.conversationTitle);
+  if (stored) return stored;
+  if (tabUrl && cid !== 'unknown' && convoId(tabUrl) === cid) return cleanTitle(tabTitle);
+  return null;
+}
+
+// Base filename (no extension) for a conversation's notes
+function convoFileBase(notes, cid) {
+  return `${slugify(convoDisplayName(notes, cid)) || cid.slice(0, 8)}-${stamp(false)}`;
 }
 
 function exportNotes(msgs, title, baseName) {
@@ -462,6 +570,7 @@ function setView(v) {
 
 // Event handlers
 $('themeBtn').onclick = toggleTheme;
+$('selPopupBtn').onclick = toggleSelPopup;
 $('langBtn').onclick = () => saveLang(lang === 'en' ? 'zh' : 'en');
 $('viewAllBtn').onclick = () => setView('all');
 $('viewCurrentBtn').onclick = () => setView('current');
@@ -486,7 +595,9 @@ $('selectBtn').onclick = () => {
 };
 
 $('selectAllBtn').onclick = () => {
-  getFiltered().forEach(m => selected.add(m.id));
+  const filtered = getFiltered();
+  const allSelected = filtered.length > 0 && filtered.every(m => selected.has(m.id));
+  filtered.forEach(m => (allSelected ? selected.delete(m.id) : selected.add(m.id)));
   render();
 };
 
@@ -497,7 +608,7 @@ $('copySelectedBtn').onclick = () => {
 
 $('exportSelectedBtn').onclick = () => {
   if (!selected.size) return alert(t('noSelection'));
-  exportNotes(messages.filter(m => selected.has(m.id)), 'Selected', 'deepseek-selected');
+  exportNotes(messages.filter(m => selected.has(m.id)), 'Selected', `ds-note-selected-${stamp(true)}`);
 };
 
 $('exportBtn').onclick = () => $('exportMenu').classList.toggle('hidden');
@@ -517,21 +628,21 @@ $('formatJsonl').onclick = () => {
 
 $('exportAll').onclick = () => {
   if (!messages.length) return alert(t('noNotes'));
-  exportNotes(messages, t('title'), 'deepseek-all');
+  exportNotes(messages, t('title'), `ds-note-all-${stamp(true)}`);
   $('exportMenu').classList.add('hidden');
 };
 
 $('exportCurrent').onclick = () => {
   const f = getFiltered();
   if (!f.length) return alert(t('noCurrent'));
-  exportNotes(f, convoId(tabUrl), `deepseek-${convoId(tabUrl).slice(0,8)}`);
+  exportNotes(f, convoDisplayName(f, convoId(tabUrl)) || convoId(tabUrl), convoFileBase(f, convoId(tabUrl)));
   $('exportMenu').classList.add('hidden');
 };
 
 $('exportByConvo').onclick = () => {
   if (!messages.length) return alert(t('noNotes'));
   Object.entries(groupByConvo(messages)).forEach(([cid, g]) => {
-    exportNotes(g.notes, cid, `deepseek-${cid.slice(0,8)}`);
+    exportNotes(g.notes, convoDisplayName(g.notes, cid) || cid, convoFileBase(g.notes, cid));
   });
   $('exportMenu').classList.add('hidden');
 };
@@ -570,6 +681,6 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // Init
 (async () => {
   await loadSettings();
-  await getTabUrl();
+  await refreshTabUrl();
   await loadNotes();
 })();
