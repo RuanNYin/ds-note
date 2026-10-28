@@ -96,7 +96,7 @@
     if (exportJsonlMenu) exportJsonlMenu.textContent = t('formatJsonl');
     if (toggleSelect && !messageSelectMode) toggleSelect.textContent = t('select');
     if (toggleSelect && messageSelectMode) toggleSelect.textContent = t('cancel');
-    if (exportSelected) exportSelected.textContent = `${t('selected')} (${selectedMsgIds.size})`;
+    if (exportSelected) exportSelected.textContent = `${t('selected')} (${selectedMessages.size})`;
   }
 
   loadSettings();
@@ -826,7 +826,54 @@
   }
 
   let messageSelectMode = false;
-  let selectedMsgIds = new Set();
+  // Selected messages are keyed by a content fingerprint and stored with a
+  // snapshot of their role/content. Index-based selection drifted whenever the
+  // virtual list recycled DOM nodes, which exported the wrong messages.
+  let selectedMessages = new Map();
+  let checkboxObserver = null;
+
+  const SEL_BG = 'rgba(59, 130, 246, 0.1)';
+
+  // Element holding the message body. Our injected controls are siblings of it,
+  // so the fingerprint stays free of them.
+  function messageSource(el) {
+    const markdowns = el.querySelectorAll('.ds-markdown');
+    if (markdowns.length > 0) return markdowns[markdowns.length - 1];
+    return el.querySelector('div') || el;
+  }
+
+  // Cheap, stable identity of a message (independent of its DOM position)
+  function messageKey(el) {
+    const role = el.querySelector('.ds-markdown') ? 'assistant' : 'user';
+    const text = messageSource(el).textContent || '';
+    return `${role}|${text.slice(0, 80)}|${text.length}`;
+  }
+
+  function messageContent(el) {
+    const markdowns = el.querySelectorAll('.ds-markdown');
+    if (markdowns.length > 0) {
+      return extractTextWithLatex(markdowns[markdowns.length - 1]);
+    }
+    const firstDiv = el.querySelector('div');
+    return firstDiv ? extractTextWithLatex(firstDiv) : (el.innerText || '').trim();
+  }
+
+  function toggleMessageSelected(el, cb, checked) {
+    const key = messageKey(el);
+    if (checked) {
+      const content = messageContent(el);
+      if (!content || !content.trim()) {
+        cb.checked = false;
+        return;
+      }
+      selectedMessages.set(key, { role: getMessageRoleFromElement(el), content });
+      el.style.background = SEL_BG;
+    } else {
+      selectedMessages.delete(key);
+      el.style.background = '';
+    }
+    updateExportSelectedBtn();
+  }
 
   function toggleMessageSelect() {
     messageSelectMode = !messageSelectMode;
@@ -839,31 +886,28 @@
       btn.classList.add('active-select');
       exportSelBtn.style.display = 'block';
       addMessageCheckboxes(true); // Auto-select latest
+      startCheckboxObserver();
     } else {
       btn.textContent = t('select');
       btn.style.background = '#444';
       btn.classList.remove('active-select');
       exportSelBtn.style.display = 'none';
-      selectedMsgIds.clear();
+      selectedMessages.clear();
       removeMessageCheckboxes();
+      stopCheckboxObserver();
     }
   }
 
   function addMessageCheckboxes(autoSelectLatest = false) {
     const containers = document.querySelectorAll('.ds-message');
-    const validContainers = [];
 
-    containers.forEach((el, idx) => {
+    // Every message gets a checkbox, user messages included
+    containers.forEach((el) => {
       if (el.querySelector('.ds-msg-checkbox')) return;
-      const markdown = el.querySelector('.ds-markdown');
-      if (!markdown) return;
-
-      validContainers.push({ el, idx });
 
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.className = 'ds-msg-checkbox';
-      cb.dataset.idx = idx;
       cb.style.cssText = `
         position: absolute;
         top: 8px;
@@ -874,30 +918,23 @@
         accent-color: #3b82f6;
       `;
 
-      cb.onchange = () => {
-        if (cb.checked) {
-          selectedMsgIds.add(idx);
-          el.style.background = 'rgba(59, 130, 246, 0.1)';
-        } else {
-          selectedMsgIds.delete(idx);
-          el.style.background = '';
-        }
-        updateExportSelectedBtn();
-      };
+      cb.onchange = () => toggleMessageSelected(el, cb, cb.checked);
 
       el.style.setProperty('position', 'relative', 'important');
       el.insertBefore(cb, el.firstChild);
     });
 
-    // Auto-select latest message
-    if (autoSelectLatest && validContainers.length > 0) {
-      const latest = validContainers[validContainers.length - 1];
-      const cb = latest.el.querySelector('.ds-msg-checkbox');
+    // Auto-select the latest answer
+    if (autoSelectLatest && containers.length > 0) {
+      let latest = null;
+      for (const el of containers) {
+        if (el.querySelector('.ds-markdown')) latest = el;
+      }
+      if (!latest) latest = containers[containers.length - 1];
+      const cb = latest.querySelector('.ds-msg-checkbox');
       if (cb) {
         cb.checked = true;
-        selectedMsgIds.add(latest.idx);
-        latest.el.style.background = 'rgba(59, 130, 246, 0.1)';
-        updateExportSelectedBtn();
+        toggleMessageSelected(latest, cb, true);
       }
     }
   }
@@ -909,59 +946,51 @@
     });
   }
 
-  function updateExportSelectedBtn() {
-    const btn = document.getElementById('ds-export-selected');
-    btn.textContent = `${t('selected')} (${selectedMsgIds.size})`;
+  // Newly rendered messages need a checkbox too — the virtual list only keeps
+  // a window of messages in the DOM
+  function startCheckboxObserver() {
+    if (checkboxObserver) return;
+    checkboxObserver = new MutationObserver(() => {
+      clearTimeout(window.dsNotesCbTimeout);
+      window.dsNotesCbTimeout = setTimeout(() => {
+        if (messageSelectMode) addMessageCheckboxes(false);
+      }, 300);
+    });
+    checkboxObserver.observe(document.body, { childList: true, subtree: true });
   }
 
-  function extractConversation(onlySelected = false) {
-    const msgEls = document.querySelectorAll('.ds-message');
-    const messages = [];
-    const seen = new Set();
-
-    // Detect user class by first message's parent (user always starts)
-    let userParentClass = null;
-    if (msgEls.length > 0) {
-      const firstParent = msgEls[0].parentElement;
-      if (firstParent) {
-        userParentClass = firstParent.className?.split(' ')[0];
-      }
+  function stopCheckboxObserver() {
+    if (checkboxObserver) {
+      checkboxObserver.disconnect();
+      checkboxObserver = null;
     }
+    clearTimeout(window.dsNotesCbTimeout);
+  }
 
-    msgEls.forEach((el, idx) => {
-      if (onlySelected && !selectedMsgIds.has(idx)) return;
+  function updateExportSelectedBtn() {
+    const btn = document.getElementById('ds-export-selected');
+    btn.textContent = `${t('selected')} (${selectedMessages.size})`;
+  }
 
-      // Determine role by parent class
-      let role = 'assistant';
-      const parent = el.parentElement;
-      if (parent && userParentClass) {
-        const parentFirstClass = parent.className?.split(' ')[0];
-        if (parentFirstClass === userParentClass) {
-          role = 'user';
-        }
-      }
+  // Collect the selected messages in conversation order. The snapshot taken at
+  // selection time is the source of truth, so messages whose DOM node was
+  // recycled away by the virtual list are still exported.
+  function extractSelectedMessages() {
+    const messages = [];
+    const used = new Set();
 
-      let content = '';
-
-      // AI messages: multiple .ds-markdown, take the LAST one (main response, not thinking)
-      const markdowns = el.querySelectorAll('.ds-markdown');
-      if (markdowns.length > 0) {
-        content = extractTextWithLatex(markdowns[markdowns.length - 1]);
-      } else {
-        // User messages: no .ds-markdown, get text from first div or element itself
-        const firstDiv = el.querySelector('div');
-        content = firstDiv ? extractTextWithLatex(firstDiv) : el.innerText.trim();
-      }
-
-      if (!content || content.length < 3) return;
-
-      // Dedupe by content prefix
-      const key = content.slice(0, 100);
-      if (seen.has(key)) return;
-      seen.add(key);
-
-      messages.push({ role, content });
+    document.querySelectorAll('.ds-message').forEach((el) => {
+      const key = messageKey(el);
+      const snap = selectedMessages.get(key);
+      if (!snap || used.has(key)) return;
+      used.add(key);
+      messages.push(snap);
     });
+
+    // Selected messages that are no longer rendered
+    for (const [key, snap] of selectedMessages) {
+      if (!used.has(key)) messages.push(snap);
+    }
 
     return messages;
   }
@@ -1109,11 +1138,11 @@
   }
 
   function exportSelectedMessages() {
-    if (!selectedMsgIds.size) {
+    if (!selectedMessages.size) {
       showToast(t('noSelected'), true);
       return;
     }
-    const messages = extractConversation(true);
+    const messages = extractSelectedMessages();
     const md = messagesToMd(messages, 'Selected Messages');
     downloadFile(md, `${slugify(document.title) || 'deepseek'}-selected-${stamp(true)}.md`, 'text/markdown');
     showToast(`${t('exported')} ${messages.length} ${t('messages')}`);
