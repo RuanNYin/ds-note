@@ -1036,7 +1036,9 @@
       exportSelBtn.style.display = 'block';
       // attachment urls must be known before the checkboxes snapshot content
       await refreshAttachmentMeta();
-      addMessageCheckboxes(true); // Auto-select latest
+      // start with nothing selected - auto-picking the last message makes the
+      // user undo it every time
+      addMessageCheckboxes(false);
       startCheckboxObserver();
     } else {
       btn.textContent = t('select');
@@ -1257,9 +1259,16 @@
 
     showToast(t('scanningConvo'));
 
-    // Scroll to top first
+    // Scroll to top first. The virtual list needs a moment to swap the
+    // bottom-most messages out for the top ones - collecting before that
+    // renders puts the tail of the conversation at the top of the export.
     scrollContainer.scrollTop = 0;
-    await new Promise(r => setTimeout(r, 500));
+    for (let i = 0; i < 15; i++) {
+      await new Promise(r => setTimeout(r, 200));
+      if (scrollContainer.scrollTop <= 0 && i >= 4) break;
+      scrollContainer.scrollTop = 0;
+    }
+    await new Promise(r => setTimeout(r, 600));
 
     // Scroll down gradually
     const scrollStep = 800;
@@ -1283,9 +1292,13 @@
 
         if (content.length < 3) return;
 
-        const key = content.slice(0, 100);
+        // Dedupe on the whole message, not its first 100 characters: two
+        // prompts that only differ further down (same attachment, different
+        // question) must both survive, while the same message seen twice
+        // during the scroll still collapses
+        const role = getMessageRoleFromElement(el);
+        const key = `${role}|${content}`;
         if (!allMessages.has(key)) {
-          const role = getMessageRoleFromElement(el);
           allMessages.set(key, { role, content });
         }
       });
