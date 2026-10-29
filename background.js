@@ -150,6 +150,10 @@ async function bundleAttachments(md) {
       if (!data.length) continue;
       const label = h.label.replace(/^!?\[|\]$/g, '').trim();
       let name = sanitizeFileName(label);
+      // images come back re-encoded as webp - keep the file honest
+      if ((res.headers.get('content-type') || '').includes('webp') && /\.(png|jpe?g)$/i.test(name)) {
+        name = name.replace(/\.(png|jpe?g)$/i, '.webp');
+      }
       let n = 1;
       while (files.some(f => f.name === name)) name = `${n++}-${name}`;
       byUrl.set(h.url, name);
@@ -191,6 +195,66 @@ async function buildAttachmentZip(md, baseName) {
   };
 }
 
+// Read the attachment metadata DeepSeek keeps in its React tree. This has to
+// run in the page's MAIN world: content scripts get their own wrapper objects
+// and cannot see the JS properties React attaches to DOM nodes.
+function collectFilesInPage() {
+  const files = [];
+  const seen = new Set();
+  const isFile = (o) => o && typeof o.signedPath === 'string' && typeof o.fileName === 'string';
+  // signedPath is "/file?file_id=..." - the real endpoint lives under /api and
+  // requires a ty= type. The server only serves some types per file kind:
+  //   ty=r  the original bytes (non-image files)
+  //   ty=p  a large preview render (images; ty=r is rejected for them)
+  //   ty=t  a small thumbnail
+  const BASE = 'https://files.deepseeksvc.com/api';
+  const typeParam = (isImage) => (isImage ? '&ty=p' : '&ty=r');
+
+  const visit = (obj, depth) => {
+    if (!obj || typeof obj !== 'object' || depth > 4 || seen.has(obj) || files.length > 200) return;
+    seen.add(obj);
+    let keys;
+    try { keys = Object.keys(obj); } catch (e) { return; }
+    for (const k of keys) {
+      let v;
+      try { v = obj[k]; } catch (e) { continue; }
+      if (!v || typeof v !== 'object') continue;
+      if (k === 'file' && isFile(v)) {
+        files.push({
+          fileName: v.fileName,
+          url: BASE + v.signedPath + typeParam(v.isImage),
+          size: v.fileSize,
+          isImage: !!v.isImage,
+          width: v.width,
+          height: v.height
+        });
+        continue;
+      }
+      if (v.$$typeof) continue;               // React element - not data
+      if (Array.isArray(v)) { for (const item of v) visit(item, depth + 1); }
+      else visit(v, depth + 1);
+    }
+  };
+
+  // The file objects hang off components INSIDE the message, so walk down the
+  // fiber tree (child + sibling) rather than up the return chain.
+  let visited = 0;
+  const walkFiber = (fiber, depth) => {
+    if (!fiber || depth > 15 || visited > 20000 || files.length > 200) return;
+    visited++;
+    if (fiber.memoizedProps) visit(fiber.memoizedProps, 0);
+    walkFiber(fiber.child, depth + 1);
+    walkFiber(fiber.sibling, depth + 1);
+  };
+
+  for (const el of document.querySelectorAll('.ds-message')) {
+    const key = Object.keys(el).find(k => k.startsWith('__reactFiber'));
+    if (!key) continue;
+    walkFiber(el[key], 0);
+  }
+  return files;
+}
+
 // Message listener
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   const { action } = request;
@@ -230,6 +294,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (action === 'clearAll') {
       clearAllMessages()
         .then(() => respond({ success: true }))
+        .catch(err => respond({ success: false, error: String(err && err.message || err) }));
+      return true;
+    }
+
+    if (action === 'attachmentMeta') {
+      const tabId = sender.tab && sender.tab.id;
+      if (tabId == null) {
+        respond({ success: false, error: 'no tab' });
+        return true;
+      }
+      chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        func: collectFilesInPage
+      })
+        .then(results => respond({ success: true, files: (results && results[0] && results[0].result) || [] }))
         .catch(err => respond({ success: false, error: String(err && err.message || err) }));
       return true;
     }

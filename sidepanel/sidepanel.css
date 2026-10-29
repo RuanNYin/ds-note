@@ -645,6 +645,14 @@ body.light .star-btn.active {
   text-decoration: underline;
 }
 
+a.att-file {
+  color: var(--accent);
+}
+
+a.att-file:hover {
+  text-decoration: underline;
+}
+
 .att-file em {
   font-style: normal;
   opacity: 0.7;

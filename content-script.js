@@ -505,20 +505,58 @@
     return t;
   }
 
+  // DeepSeek keeps the attachment metadata - including a signed download path -
+  // in the React tree attached to the message nodes. Content scripts run in an
+  // isolated world and cannot read those JS properties, so the background reads
+  // them in the page's main world and hands back plain data. The chip itself
+  // has no link and the <img> only points at a downscaled thumbnail.
+  let attachmentMetaCache = new Map();
+
+  async function refreshAttachmentMeta() {
+    try {
+      const res = await sendMessageWithTimeout({ action: 'attachmentMeta' }, 15000);
+      if (res && res.success && Array.isArray(res.files)) {
+        attachmentMetaCache = new Map(res.files.map(f => [f.fileName, f]));
+      }
+    } catch (e) {
+      // page not reachable (or extension reloaded) - fall back to DOM only
+      console.warn('[DS Note] attachment meta unavailable', e);
+    }
+    return attachmentMetaCache;
+  }
+
+  function formatSize(bytes) {
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let n = bytes, i = 0;
+    while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+    const num = i === 0 ? n : (n < 10 ? n.toFixed(2) : Math.round(n));
+    return `${num} ${units[i]}`;
+  }
+
+  function findMeta(name) {
+    const map = attachmentMetaCache;
+    if (!map || !name) return null;
+    if (map.has(name)) return map.get(name);
+    for (const [key, value] of map) {
+      if (key.endsWith(name) || name.endsWith(key)) return value;
+    }
+    return null;
+  }
+
   // DeepSeek renders uploaded/pasted files as a chip: a file icon plus two
   // sibling blocks - the file name and "TYPE 9.93KB". Without recognising it
   // the chip collapses into one glued run of text ("name.txtTXT 9.93KB") and
   // the attachment is lost. The chip's class names are build-hashed, so
   // detection is structural.
   function markFileChips(root) {
-    for (const meta of root.querySelectorAll('div, span')) {
-      const t = ownText(meta).replace(/\s+/g, ' ').trim();
+    for (const metaEl of root.querySelectorAll('div, span')) {
+      const t = ownText(metaEl).replace(/\s+/g, ' ').trim();
       const m = t.match(/^([A-Za-z0-9]{1,5})\s+([\d.,]+\s*[KMGT]?B)$/);
       if (!m) continue;
 
       // The file name sits in the preceding sibling block
       let name = '';
-      let prev = meta.previousElementSibling;
+      let prev = metaEl.previousElementSibling;
       while (prev && !name) {
         const pt = (prev.textContent || '').replace(/\s+/g, ' ').trim();
         if (pt && pt.length <= 200) name = pt;
@@ -526,18 +564,21 @@
       }
       if (!name) continue;
 
-      const chip = meta.parentElement;
+      const chip = metaEl.parentElement;
       const scope = chip && chip.parentElement ? chip.parentElement : chip;
       if (!scope || !scope.querySelector('svg, img')) continue;
 
-      // A file chip carries no URL of its own, but pick one up if present
-      const linkEl = scope.querySelector('a[href], img[src*="files.deepseeksvc.com"]');
-      const url = linkEl ? (linkEl.getAttribute('href') || linkEl.getAttribute('src') || '') : '';
+      // Prefer the signed download path from the React tree; fall back to
+      // whatever link the chip happens to contain
+      const info = findMeta(name);
+      const linkEl = info ? null : scope.querySelector('a[href], img[src*="files.deepseeksvc.com"]');
+      const url = info ? info.url : (linkEl ? (linkEl.getAttribute('href') || linkEl.getAttribute('src') || '') : '');
+      const size = info && info.size ? formatSize(info.size) : m[2].replace(/([KMGT]?B)$/i, ' $1');
 
       chip.setAttribute(FILE_CHIP_MARK, JSON.stringify({
         name,
         type: m[1].toUpperCase(),
-        size: m[2].replace(/([KMGT]?B)$/i, ' $1'),
+        size,
         url
       }));
     }
@@ -636,7 +677,10 @@
         case 'img': {
           const alt = node.getAttribute('alt') || '';
           const src = node.getAttribute('src') || '';
-          return `![${alt}](${src})`;
+          // the <img> usually points at a downscaled thumbnail - link the
+          // original file when the attachment metadata knows about it
+          const info = findMeta(alt);
+          return `![${alt}](${info ? info.url : src})`;
         }
         case 'div': case 'span': case 'section':
           return children;
@@ -675,7 +719,8 @@
     return null;
   }
 
-  function saveMessageContent(messageEl, btn) {
+  async function saveMessageContent(messageEl, btn) {
+    await refreshAttachmentMeta();
     const markdowns = messageEl.querySelectorAll('.ds-markdown');
     const markdown = markdowns.length > 0 ? markdowns[markdowns.length - 1] : null;
     // User messages have no .ds-markdown; convert their body the same way so
@@ -966,7 +1011,7 @@
     updateExportSelectedBtn();
   }
 
-  function toggleMessageSelect() {
+  async function toggleMessageSelect() {
     messageSelectMode = !messageSelectMode;
     const btn = document.getElementById('ds-toggle-select');
     const exportSelBtn = document.getElementById('ds-export-selected');
@@ -976,6 +1021,8 @@
       btn.style.background = '#dc2626';
       btn.classList.add('active-select');
       exportSelBtn.style.display = 'block';
+      // attachment urls must be known before the checkboxes snapshot content
+      await refreshAttachmentMeta();
       addMessageCheckboxes(true); // Auto-select latest
       startCheckboxObserver();
     } else {
@@ -1156,6 +1203,7 @@
   }
 
   async function scrollAndCollectAll() {
+    await refreshAttachmentMeta();
     const scrollContainer = document.querySelector('.ds-virtual-list');
     if (!scrollContainer) {
       showToast(t('noMessages'), true);

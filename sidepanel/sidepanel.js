@@ -200,7 +200,13 @@ function attachmentChip(raw) {
   }
   const file = raw.trim().match(/^📎\s*(.+?)\s*\(([^)]*)\)$/);
   if (file) {
-    return `<span class="att att-file" title="${attrEsc(file[1])}">📎 ${esc(file[1])}<em>${esc(file[2])}</em></span>`;
+    const meta = esc(file[2]);
+    // files backed by a signed download path are rendered as links
+    const link = file[1].match(/^\[([^\]]*)\]\(([^)]+)\)$/);
+    if (link) {
+      return `<a class="att att-file" href="${attrEsc(link[2])}" target="_blank" rel="noreferrer" title="${attrEsc(link[1])}">📎 ${esc(link[1])}<em>${meta}</em></a>`;
+    }
+    return `<span class="att att-file" title="${attrEsc(file[1])}">📎 ${esc(file[1])}<em>${meta}</em></span>`;
   }
   return `<span class="att">${esc(raw.trim())}</span>`;
 }
