@@ -8,6 +8,7 @@
   const SAVE_BTN_ID = 'ds-notes-selection-btn';
   let lang = 'en';
   let selectionPopup = true; // show save/markdown bar on text selection
+  let exportFormat = 'md'; // 'md' | 'jsonl' | 'zip' - used by both export buttons
 
   // i18n for content script
   const i18n = {
@@ -19,6 +20,7 @@
       exportAll: '📤 Export All',
       formatMd: '📄 Markdown',
       formatJsonl: '📋 JSONL',
+      formatZip: '🗜 ZIP',
       select: '☑️ Select',
       cancel: '❌ Cancel',
       selected: '📤 Selected',
@@ -29,7 +31,10 @@
       noSelected: 'No messages selected',
       scanningConvo: 'Scanning conversation...',
       copied: 'Copied as Markdown!',
-      copyFail: 'Copy failed'
+      copyFail: 'Copy failed',
+      exportFailed: 'Export failed',
+      zipFallback: 'Attachment bundling failed, exported Markdown only',
+      formatLabel: 'Format'
     },
     zh: {
       save: '📌 保存',
@@ -39,6 +44,7 @@
       exportAll: '📤 导出全部',
       formatMd: '📄 Markdown',
       formatJsonl: '📋 JSONL',
+      formatZip: '🗜 ZIP',
       select: '☑️ 选择',
       cancel: '❌ 取消',
       selected: '📤 已选',
@@ -49,7 +55,10 @@
       noSelected: '未选择消息',
       scanningConvo: '正在扫描对话...',
       copied: '已复制为 Markdown！',
-      copyFail: '复制失败'
+      copyFail: '复制失败',
+      exportFailed: '导出失败',
+      zipFallback: '附件打包失败，已仅导出 Markdown',
+      formatLabel: '格式'
     }
   };
 
@@ -94,6 +103,21 @@
     if (exportAllBtn) exportAllBtn.textContent = t('exportAll');
     if (exportMdMenu) exportMdMenu.textContent = t('formatMd');
     if (exportJsonlMenu) exportJsonlMenu.textContent = t('formatJsonl');
+    const exportZipMenu = document.getElementById('ds-export-zip');
+    if (exportZipMenu) exportZipMenu.textContent = t('formatZip');
+
+    // Mark the format that both export buttons use
+    const formatLabel = { md: t('formatMd'), jsonl: t('formatJsonl'), zip: t('formatZip') }[exportFormat];
+    const formatShort = { md: 'MD', jsonl: 'JSONL', zip: 'ZIP' }[exportFormat];
+    const dropdown = document.getElementById('ds-export-dropdown');
+    if (dropdown) {
+      dropdown.textContent = `▼ ${formatShort}`;
+      dropdown.title = `${t('formatLabel')}: ${formatLabel}`;
+    }
+    [['ds-export-md', 'md'], ['ds-export-jsonl', 'jsonl'], ['ds-export-zip', 'zip']].forEach(([id, fmt]) => {
+      const btn = document.getElementById(id);
+      if (btn) btn.style.color = fmt === exportFormat ? '#7dd3fc' : '#ddd';
+    });
     if (toggleSelect && !messageSelectMode) toggleSelect.textContent = t('select');
     if (toggleSelect && messageSelectMode) toggleSelect.textContent = t('cancel');
     if (exportSelected) exportSelected.textContent = `${t('selected')} (${selectedMessages.size})`;
@@ -473,18 +497,77 @@
     return el.querySelector('.ds-markdown') ? 'assistant' : 'user';
   }
 
+  const FILE_CHIP_MARK = 'data-ds-file-chip';
+
+  function ownText(el) {
+    let t = '';
+    for (const n of el.childNodes) if (n.nodeType === 3) t += n.textContent;
+    return t;
+  }
+
+  // DeepSeek renders uploaded/pasted files as a chip: a file icon plus two
+  // sibling blocks - the file name and "TYPE 9.93KB". Without recognising it
+  // the chip collapses into one glued run of text ("name.txtTXT 9.93KB") and
+  // the attachment is lost. The chip's class names are build-hashed, so
+  // detection is structural.
+  function markFileChips(root) {
+    for (const meta of root.querySelectorAll('div, span')) {
+      const t = ownText(meta).replace(/\s+/g, ' ').trim();
+      const m = t.match(/^([A-Za-z0-9]{1,5})\s+([\d.,]+\s*[KMGT]?B)$/);
+      if (!m) continue;
+
+      // The file name sits in the preceding sibling block
+      let name = '';
+      let prev = meta.previousElementSibling;
+      while (prev && !name) {
+        const pt = (prev.textContent || '').replace(/\s+/g, ' ').trim();
+        if (pt && pt.length <= 200) name = pt;
+        prev = prev.previousElementSibling;
+      }
+      if (!name) continue;
+
+      const chip = meta.parentElement;
+      const scope = chip && chip.parentElement ? chip.parentElement : chip;
+      if (!scope || !scope.querySelector('svg, img')) continue;
+
+      // A file chip carries no URL of its own, but pick one up if present
+      const linkEl = scope.querySelector('a[href], img[src*="files.deepseeksvc.com"]');
+      const url = linkEl ? (linkEl.getAttribute('href') || linkEl.getAttribute('src') || '') : '';
+
+      chip.setAttribute(FILE_CHIP_MARK, JSON.stringify({
+        name,
+        type: m[1].toUpperCase(),
+        size: m[2].replace(/([KMGT]?B)$/i, ' $1'),
+        url
+      }));
+    }
+  }
+
   function htmlToMarkdown(el) {
     if (!el) return '';
     const clone = el.cloneNode(true);
 
-    // Remove thinking/collapsed sections
-    clone.querySelectorAll('.ds-thinking, .ds-collapse').forEach(e => e.remove());
+    // Remove thinking/collapsed sections, and our own injected controls
+    clone.querySelectorAll('.ds-thinking, .ds-collapse, .ds-notes-msg-btn, .ds-msg-checkbox').forEach(e => e.remove());
+
+    // Recognise attachment chips before converting, so they become one
+    // structured line instead of glued text
+    markFileChips(clone);
 
     function convert(node) {
       if (node.nodeType === 3) return node.textContent;
       if (node.nodeType !== 1) return '';
 
       const tag = node.tagName.toLowerCase();
+
+      const chipAttr = node.getAttribute(FILE_CHIP_MARK);
+      if (chipAttr) {
+        const chip = JSON.parse(chipAttr);
+        let name = chip.name.replace(/[[\]]/g, '').trim();
+        if (name.length > 80) name = name.slice(0, 80) + '…';
+        const label = chip.url ? `[${name}](${chip.url})` : name;
+        return `\n📎 ${label} (${chip.type}, ${chip.size})\n`;
+      }
 
       // KaTeX math
       if (node.classList?.contains('katex')) {
@@ -595,7 +678,9 @@
   function saveMessageContent(messageEl, btn) {
     const markdowns = messageEl.querySelectorAll('.ds-markdown');
     const markdown = markdowns.length > 0 ? markdowns[markdowns.length - 1] : null;
-    const content = markdown ? htmlToMarkdown(markdown) : messageEl.innerText.trim();
+    // User messages have no .ds-markdown; convert their body the same way so
+    // attachments (images, file chips) are not dropped
+    const content = markdown ? htmlToMarkdown(markdown) : htmlToMarkdown(messageSource(messageEl));
     // Keep raw text for search (without LaTeX conversion)
     const rawText = messageEl.innerText.trim();
 
@@ -660,14 +745,13 @@
 
     messageEls.forEach(el => {
       if (el.hasAttribute(PROCESSED_ATTR)) return;
+      if (el.querySelector(`.${MSG_BTN_CLASS}`)) return;
 
       const markdown = el.querySelector('.ds-markdown');
-      if (!markdown) return;
-
-      const content = markdown.innerText.trim();
+      // AI replies are markdown blocks, user messages are plain text - but the
+      // user side is exactly where the attachments live, so save those too
+      const content = markdown ? markdown.innerText.trim() : (el.innerText || '').trim();
       if (content.length < 10) return;
-
-      if (el.querySelector(`.${MSG_BTN_CLASS}`)) return;
 
       el.setAttribute(PROCESSED_ATTR, 'true');
       el.style.setProperty('position', 'relative', 'important');
@@ -704,6 +788,7 @@
         <div id="ds-export-menu" class="ds-dropdown-menu" style="display:none;">
           <button id="ds-export-md">📄 Markdown</button>
           <button id="ds-export-jsonl">📋 JSONL</button>
+          <button id="ds-export-zip">🗜 ZIP</button>
         </div>
       </div>
       <button id="ds-toggle-select"></button>
@@ -744,9 +829,10 @@
     const dropdownBtn = bar.querySelector('#ds-export-dropdown');
     dropdownBtn.style.cssText = btnStyle + `
       border-radius: 0 6px 6px 0;
-      padding: 6px 6px;
+      padding: 6px 8px;
       border-left: 1px solid #444;
-      font-size: 9px;
+      font-size: 10px;
+      white-space: nowrap;
     `;
 
     // Dropdown menu
@@ -800,6 +886,7 @@
     document.getElementById('ds-export-all').textContent = t('exportAll');
     document.getElementById('ds-export-md').textContent = t('formatMd');
     document.getElementById('ds-export-jsonl').textContent = t('formatJsonl');
+    document.getElementById('ds-export-zip').textContent = t('formatZip');
     document.getElementById('ds-toggle-select').textContent = t('select');
     document.getElementById('ds-export-selected').textContent = `${t('selected')} (0)`;
 
@@ -818,11 +905,15 @@
     });
 
     // Event handlers
-    document.getElementById('ds-export-all').onclick = () => exportAllConversation('md');
-    document.getElementById('ds-export-md').onclick = () => { exportAllConversation('md'); menu.style.display = 'none'; };
-    document.getElementById('ds-export-jsonl').onclick = () => { exportAllConversation('jsonl'); menu.style.display = 'none'; };
+    document.getElementById('ds-export-all').onclick = () => exportAllConversation(exportFormat);
+    document.getElementById('ds-export-md').onclick = () => { setExportFormat('md'); menu.style.display = 'none'; };
+    document.getElementById('ds-export-jsonl').onclick = () => { setExportFormat('jsonl'); menu.style.display = 'none'; };
+    document.getElementById('ds-export-zip').onclick = () => { setExportFormat('zip'); menu.style.display = 'none'; };
     document.getElementById('ds-export-selected').onclick = exportSelectedMessages;
     document.getElementById('ds-toggle-select').onclick = toggleMessageSelect;
+
+    // reflect the current export format (and any language change)
+    updateAllText();
   }
 
   let messageSelectMode = false;
@@ -1038,7 +1129,30 @@
     a.href = url;
     a.download = filename;
     a.click();
-    URL.revokeObjectURL(url);
+    // revoke late: large bundles can be cancelled if the URL dies too early
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  // The background worker may be asleep or wedged - never let an export hang
+  // forever, otherwise the user only sees a button that does nothing.
+  function sendMessageWithTimeout(message, timeout = 60000) {
+    return Promise.race([
+      chrome.runtime.sendMessage(message),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('background timeout')), timeout)
+      )
+    ]);
+  }
+
+  // ZIP export: the markdown plus the attachments it references, bundled
+  // locally so the export stays usable offline
+  async function downloadZip(md, baseName) {
+    const res = await sendMessageWithTimeout({ action: 'buildZip', md, baseName });
+    if (!res?.success) throw new Error(res?.error || 'ZIP export failed');
+    const bin = atob(res.base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    downloadFile(bytes, res.filename, 'application/zip');
   }
 
   async function scrollAndCollectAll() {
@@ -1104,8 +1218,14 @@
     return Array.from(allMessages.values());
   }
 
+  // The format chosen in the dropdown applies to both export buttons
+  function setExportFormat(fmt) {
+    exportFormat = fmt;
+    updateAllText();
+  }
+
   async function exportAllConversation(format = 'md') {
-    const btnId = format === 'jsonl' ? 'ds-export-jsonl' : 'ds-export-all';
+    const btnId = format === 'jsonl' ? 'ds-export-jsonl' : format === 'zip' ? 'ds-export-zip' : 'ds-export-all';
     const btn = document.getElementById(btnId);
     const originalText = btn.textContent;
     btn.textContent = t('scanning');
@@ -1121,16 +1241,29 @@
 
       const title = document.title || 'DeepSeek Conversation';
       const base = `${slugify(title) || 'deepseek'}-${stamp(true)}`;
+      const md = messagesToMd(messages, title);
 
-      if (format === 'jsonl') {
+      if (format === 'zip') {
+        try {
+          await downloadZip(md, base);
+        } catch (e) {
+          // bundling the attachments failed - deliver the conversation anyway
+          console.warn('[DS Note] zip export failed', e);
+          downloadFile(md, `${base}.md`, 'text/markdown');
+          showToast(t('zipFallback'), true);
+          return;
+        }
+      } else if (format === 'jsonl') {
         const jsonl = messagesToJsonl(messages, title);
         downloadFile(jsonl, `${base}.jsonl`, 'application/jsonl');
       } else {
-        const md = messagesToMd(messages, title);
         downloadFile(md, `${base}.md`, 'text/markdown');
       }
 
       showToast(`${t('exported')} ${messages.length} ${t('messages')}`);
+    } catch (e) {
+      console.error('[DS Note] export failed', e);
+      showToast(`${t('exportFailed')}: ${e && e.message ? e.message : e}`, true);
     } finally {
       btn.textContent = originalText;
       btn.disabled = false;
@@ -1143,9 +1276,25 @@
       return;
     }
     const messages = extractSelectedMessages();
-    const md = messagesToMd(messages, 'Selected Messages');
-    downloadFile(md, `${slugify(document.title) || 'deepseek'}-selected-${stamp(true)}.md`, 'text/markdown');
-    showToast(`${t('exported')} ${messages.length} ${t('messages')}`);
+    const title = 'Selected Messages';
+    const base = `${slugify(document.title) || 'deepseek'}-selected-${stamp(true)}`;
+    const md = messagesToMd(messages, title);
+
+    if (exportFormat === 'zip') {
+      downloadZip(md, base)
+        .then(() => showToast(`${t('exported')} ${messages.length} ${t('messages')}`))
+        .catch(e => {
+          console.warn('[DS Note] zip export failed', e);
+          downloadFile(md, `${base}.md`, 'text/markdown');
+          showToast(t('zipFallback'), true);
+        });
+    } else if (exportFormat === 'jsonl') {
+      downloadFile(messagesToJsonl(messages, title), `${base}.jsonl`, 'application/jsonl');
+      showToast(`${t('exported')} ${messages.length} ${t('messages')}`);
+    } else {
+      downloadFile(md, `${base}.md`, 'text/markdown');
+      showToast(`${t('exported')} ${messages.length} ${t('messages')}`);
+    }
 
     // Exit select mode
     toggleMessageSelect();
@@ -1325,7 +1474,9 @@
 
       return true;
     }
-    return true;
+    // other actions are handled elsewhere (background / side panel): do not
+    // hold the message channel open
+    return false;
   });
 
   function findMessageByText(searchText) {

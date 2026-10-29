@@ -48,7 +48,8 @@ const i18n = {
     selPopupOn: 'Selection popup: on',
     selPopupOff: 'Selection popup: off',
     collapse: 'Collapse',
-    expand: 'Expand'
+    expand: 'Expand',
+    zipFallback: 'Attachment bundling failed, exported Markdown only'
   },
   zh: {
     title: 'DS Note',
@@ -93,7 +94,8 @@ const i18n = {
     selPopupOn: '选中弹窗：开',
     selPopupOff: '选中弹窗：关',
     collapse: '收起',
-    expand: '展开'
+    expand: '展开',
+    zipFallback: '附件打包失败，已仅导出 Markdown'
   }
 };
 
@@ -179,6 +181,46 @@ function highlight(text, query) {
   return escaped.replace(regex, '<mark>$1</mark>');
 }
 
+// Attachments are stored inside the note text as markdown:
+//   📎 name (TXT, 9.93 KB)
+//   ![alt](https://files.deepseeksvc.com/api/file?...)
+// Show them as compact chips instead of raw markdown.
+const ATTACHMENT_RE = /(!\[[^\]]*\]\([^)]+\))|(\n?📎[^\n]*)/g;
+
+function attrEsc(text) {
+  return esc(text).replace(/"/g, '&quot;');
+}
+
+function attachmentChip(raw) {
+  const img = raw.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+  if (img) {
+    const url = img[2].trim();
+    const label = (img[1] || '').trim() || 'image';
+    return `<a class="att att-img" href="${attrEsc(url)}" target="_blank" rel="noreferrer" title="${attrEsc(url)}">🖼 ${esc(label)}</a>`;
+  }
+  const file = raw.trim().match(/^📎\s*(.+?)\s*\(([^)]*)\)$/);
+  if (file) {
+    return `<span class="att att-file" title="${attrEsc(file[1])}">📎 ${esc(file[1])}<em>${esc(file[2])}</em></span>`;
+  }
+  return `<span class="att">${esc(raw.trim())}</span>`;
+}
+
+// Render note text: plain parts get search highlighting, attachment parts
+// become chips.
+function renderContent(text, query) {
+  const out = [];
+  let last = 0;
+  let m;
+  ATTACHMENT_RE.lastIndex = 0;
+  while ((m = ATTACHMENT_RE.exec(text)) !== null) {
+    if (m.index > last) out.push(highlight(text.slice(last, m.index), query));
+    out.push(attachmentChip(m[0]));
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(highlight(text.slice(last), query));
+  return out.join('');
+}
+
 function groupByConvo(msgs) {
   const g = {};
   msgs.forEach(m => {
@@ -250,7 +292,7 @@ function createCard(note) {
       <span class="note-role ${note.role}">${t(note.role)}</span>
       <span class="note-time">${formatTime(note.savedAt)}</span>
     </div>
-    <div class="note-content">${highlight(note.content, searchQuery)}</div>
+    <div class="note-content">${renderContent(note.content, searchQuery)}</div>
     <div class="note-actions">
       <button class="jump-btn" title="${t('jumpTo')}">↗</button>
       <button class="delete-btn">${t('delete')}</button>
@@ -379,7 +421,7 @@ function render() {
 
       const btns = hdr.querySelectorAll('.convo-btn');
       btns[0].onclick = () => copyText(toPlain(g.notes));
-      btns[1].onclick = () => download(toMd(g.notes, convoDisplayName(g.notes, cid) || cid), `${convoFileBase(g.notes, cid)}.md`);
+      btns[1].onclick = () => exportNotes(g.notes, convoDisplayName(g.notes, cid) || cid, convoFileBase(g.notes, cid));
 
       grp.appendChild(hdr);
       g.notes.forEach(n => grp.appendChild(createCard(n)));
@@ -483,10 +525,14 @@ function toJsonl(msgs, title) {
 }
 
 function download(content, name, mimeType = 'text/markdown') {
+  const blob = content instanceof Blob ? content : new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([content], { type: mimeType }));
+  a.href = url;
   a.download = name;
   a.click();
+  // give the browser a moment to start the download before releasing the url
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 // Filename helpers — keep names unique and readable across all export paths
@@ -533,8 +579,33 @@ function convoFileBase(notes, cid) {
 function exportNotes(msgs, title, baseName) {
   if (exportFormat === 'jsonl') {
     download(toJsonl(msgs, title), `${baseName}.jsonl`, 'application/jsonl');
+  } else if (exportFormat === 'zip') {
+    exportZip(msgs, title, baseName);
   } else {
     download(toMd(msgs, title), `${baseName}.md`, 'text/markdown');
+  }
+}
+
+// ZIP export: the markdown plus every attachment it references, bundled
+// locally so the export stays usable offline
+async function exportZip(msgs, title, baseName) {
+  const md = toMd(msgs, title);
+  try {
+    const res = await Promise.race([
+      chrome.runtime.sendMessage({ action: 'buildZip', md, baseName }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('background timeout')), 60000))
+    ]);
+    if (!res?.success) throw new Error(res?.error || 'ZIP export failed');
+    const bin = atob(res.base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    download(new Blob([bytes], { type: 'application/zip' }), res.filename);
+    toast(t('exported'));
+  } catch (e) {
+    // bundling failed - deliver the notes as markdown rather than nothing
+    console.error('[DS Note] zip export failed', e);
+    download(md, `${baseName}.md`, 'text/markdown');
+    toast(t('zipFallback'));
   }
 }
 
@@ -614,17 +685,16 @@ $('exportSelectedBtn').onclick = () => {
 $('exportBtn').onclick = () => $('exportMenu').classList.toggle('hidden');
 
 // Format toggle handlers
-$('formatMd').onclick = () => {
-  exportFormat = 'md';
-  $('formatMd').classList.add('active');
-  $('formatJsonl').classList.remove('active');
-};
+function setExportFormat(fmt) {
+  exportFormat = fmt;
+  $('formatMd').classList.toggle('active', fmt === 'md');
+  $('formatJsonl').classList.toggle('active', fmt === 'jsonl');
+  $('formatZip').classList.toggle('active', fmt === 'zip');
+}
 
-$('formatJsonl').onclick = () => {
-  exportFormat = 'jsonl';
-  $('formatJsonl').classList.add('active');
-  $('formatMd').classList.remove('active');
-};
+$('formatMd').onclick = () => setExportFormat('md');
+$('formatJsonl').onclick = () => setExportFormat('jsonl');
+$('formatZip').onclick = () => setExportFormat('zip');
 
 $('exportAll').onclick = () => {
   if (!messages.length) return alert(t('noNotes'));
