@@ -1470,6 +1470,18 @@
   }
 
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'dsnoteAttachmentMeta') {
+      // The side panel needs the current attachment urls: notes saved before
+      // this feature existed have no links in them
+      refreshAttachmentMeta().then(() => {
+        sendResponse({
+          success: true,
+          files: Array.from(attachmentMetaCache.values())
+        });
+      });
+      return true;
+    }
+
     if (request.action === 'scrollToMessage') {
       const { scrollRatio, contentPreview, userMessageText, selectionText } = request;
 

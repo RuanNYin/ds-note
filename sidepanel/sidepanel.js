@@ -505,6 +505,53 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 chrome.tabs.onActivated.addListener(() => refreshTabUrl());
 
+// Notes saved before attachment links existed carry only the file name.
+// Ask the open DeepSeek tab for the current attachment urls and put them back.
+async function relinkNotes(msgs) {
+  let files = [];
+  try {
+    // prefer the tab the user is looking at, fall back to any DeepSeek tab
+    const candidates = [];
+    const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (active?.id && active.url?.includes('chat.deepseek.com')) candidates.push(active);
+    const others = await chrome.tabs.query({ url: 'https://chat.deepseek.com/*' });
+    for (const t of others) if (!candidates.some(c => c.id === t.id)) candidates.push(t);
+
+    for (const tab of candidates) {
+      try {
+        const res = await chrome.tabs.sendMessage(tab.id, { action: 'dsnoteAttachmentMeta' });
+        if (res?.success && Array.isArray(res.files) && res.files.length) {
+          files = res.files;
+          break;
+        }
+      } catch {}
+    }
+  } catch {
+    return msgs;
+  }
+  if (!files.length) return msgs;
+
+  const byName = new Map(files.map(f => [f.fileName, f]));
+  return msgs.map(m => ({ ...m, content: relinkContent(m.content, byName) }));
+}
+
+function relinkContent(content, byName) {
+  if (!content) return content;
+  // 📎 name (TYPE, SIZE)  ->  📎 [name](url) (TYPE, SIZE)
+  // the file name may contain parentheses, so take the last group as the meta
+  let out = content.replace(/📎\s*(.+?)\s*\(([^()\n]*)\)\s*$/gm, (full, name, meta) => {
+    const key = name.trim();
+    const info = byName.get(key);
+    return info && info.url ? `📎 [${key}](${info.url}) (${meta})` : full;
+  });
+  // ![alt](old-url)  ->  ![alt](new-url)
+  out = out.replace(/!\[([^\]]*)\]\((https:\/\/files\.deepseeksvc\.com[^)]*)\)/g, (full, alt) => {
+    const info = byName.get(alt.trim());
+    return info && info.url ? `![${alt}](${info.url})` : full;
+  });
+  return out;
+}
+
 function toPlain(msgs) {
   return msgs.map(m => `[${t(m.role)}]\n${m.content}`).join('\n\n---\n\n');
 }
@@ -592,13 +639,14 @@ function convoFileBase(notes, cid) {
   return `${slugify(convoDisplayName(notes, cid)) || cid.slice(0, 8)}-${stamp(false)}`;
 }
 
-function exportNotes(msgs, title, baseName) {
+async function exportNotes(msgs, title, baseName) {
+  const linked = await relinkNotes(msgs);
   if (exportFormat === 'jsonl') {
-    download(toJsonl(msgs, title), `${baseName}.jsonl`, 'application/jsonl');
+    download(toJsonl(linked, title), `${baseName}.jsonl`, 'application/jsonl');
   } else if (exportFormat === 'zip') {
-    exportZip(msgs, title, baseName);
+    exportZip(linked, title, baseName);
   } else {
-    download(toMd(msgs, title), `${baseName}.md`, 'text/markdown');
+    download(toMd(linked, title), `${baseName}.md`, 'text/markdown');
   }
 }
 

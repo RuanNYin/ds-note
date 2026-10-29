@@ -156,7 +156,15 @@ async function bundleAttachments(md) {
       }
       let n = 1;
       while (files.some(f => f.name === name)) name = `${n++}-${name}`;
-      byUrl.set(h.url, name);
+      // The zip entry keeps the plain name, the markdown link needs it
+      // encoded - spaces, parentheses and brackets would break the link syntax
+      const linkName = name
+        .split('/')
+        .map(part => encodeURIComponent(part)
+          .replace(/\(/g, '%28').replace(/\)/g, '%29')
+          .replace(/\[/g, '%5B').replace(/\]/g, '%5D'))
+        .join('/');
+      byUrl.set(h.url, linkName);
       files.push({ name, data });
     } catch (e) {
       // leave the remote link in place
