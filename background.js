@@ -187,6 +187,39 @@ function bytesToBase64(bytes) {
   return btoa(binary);
 }
 
+// === Attachment bytes for re-injection ===
+// The composer only accepts real File objects, so the bytes have to travel
+// from the worker (which can fetch the signed URL) to the content script.
+// chrome messaging is JSON-only and size-capped, so the file is held here and
+// streamed out in chunks instead of being returned in one message.
+const ATTACHMENT_CACHE = new Map();
+let attachmentSeq = 0;
+const ATTACHMENT_CACHE_MAX = 4;
+
+function evictAttachments() {
+  while (ATTACHMENT_CACHE.size > ATTACHMENT_CACHE_MAX) {
+    ATTACHMENT_CACHE.delete(ATTACHMENT_CACHE.keys().next().value);
+  }
+}
+
+async function stageAttachment(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = new Uint8Array(await res.arrayBuffer());
+  if (!data.length) throw new Error('empty file');
+  const id = ++attachmentSeq;
+  ATTACHMENT_CACHE.set(id, data);
+  evictAttachments();
+  return { id, size: data.length, mime: res.headers.get('content-type') || '' };
+}
+
+function attachmentChunk(id, offset, length) {
+  const data = ATTACHMENT_CACHE.get(id);
+  if (!data) throw new Error('attachment expired');
+  const end = Math.min(offset + length, data.length);
+  return bytesToBase64(data.subarray(offset, end));
+}
+
 // Build a zip holding the markdown plus every attachment it references.
 async function buildAttachmentZip(md, baseName) {
   const bundled = await bundleAttachments(md);
@@ -333,6 +366,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       buildAttachmentZip(request.md, request.baseName || 'export')
         .then(zip => respond({ success: true, ...zip }))
         .catch(err => respond({ success: false, error: String(err && err.message || err) }));
+      return true;
+    }
+
+    if (action === 'stageAttachment') {
+      stageAttachment(request.url)
+        .then(info => respond({ success: true, ...info }))
+        .catch(err => respond({ success: false, error: String(err && err.message || err) }));
+      return true;
+    }
+
+    if (action === 'attachmentChunk') {
+      try {
+        respond({
+          success: true,
+          base64: attachmentChunk(request.id, request.offset, request.length)
+        });
+      } catch (err) {
+        respond({ success: false, error: String(err && err.message || err) });
+      }
+      return true;
+    }
+
+    if (action === 'dropAttachment') {
+      ATTACHMENT_CACHE.delete(request.id);
+      respond({ success: true });
       return true;
     }
 

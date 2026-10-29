@@ -34,7 +34,23 @@
       copyFail: 'Copy failed',
       exportFailed: 'Export failed',
       zipFallback: 'Attachment bundling failed, exported Markdown only',
-      formatLabel: 'Format'
+      formatLabel: 'Format',
+      reinject: '📥 Re-inject',
+      reinjectBusy: '⏳...',
+      reinjectCollecting: 'Collecting the conversation and its attachments...',
+      reinjectFetching: 'Reading attachments',
+      reinjectBuilding: 'Building the transcript...',
+      reinjectNoChat: 'Could not find "New chat"',
+      reinjectFailed: 'Re-inject failed',
+      reinjectDone: 'Injected',
+      reinjectFiles: 'files - check, then press send',
+      reinjectPartial: 'only ready',
+      reinjectUploading: 'Uploading attachments',
+      reinjectPrompt: 'The attached .md is the full record of my previous conversation, and the other files are the attachments it mentions. Please read them first, then we continue from there.',
+      reinjectMdTitle: 'Conversation record',
+      reinjectMdNote: 'This is the full record of an earlier conversation, exported by DS Note. The files uploaded together with this document are the attachments named below.',
+      reinjectMdSkipped: 'Too many attachments for one upload - these were not included:',
+      reinjectImage: 'image'
     },
     zh: {
       save: '📌 保存',
@@ -58,7 +74,23 @@
       copyFail: '复制失败',
       exportFailed: '导出失败',
       zipFallback: '附件打包失败，已仅导出 Markdown',
-      formatLabel: '格式'
+      formatLabel: '格式',
+      reinject: '📥 回灌',
+      reinjectBusy: '⏳...',
+      reinjectCollecting: '正在收集对话与附件...',
+      reinjectFetching: '正在读取附件',
+      reinjectBuilding: '正在生成对话记录...',
+      reinjectNoChat: '找不到「开启新对话」按钮',
+      reinjectFailed: '回灌失败',
+      reinjectDone: '已注入',
+      reinjectFiles: '个文件，请检查后发送',
+      reinjectPartial: '仅就绪',
+      reinjectUploading: '附件上传中',
+      reinjectPrompt: '随附的 .md 是我上一段对话的完整记录，其余文件是记录中提到的附件。请先通读，然后我们就在这里接着聊。',
+      reinjectMdTitle: '对话记录',
+      reinjectMdNote: '这是一段历史对话的完整记录（由 DS Note 导出）。与本文档一同上传的文件，就是下文中提到的那些附件。',
+      reinjectMdSkipped: '附件数量超出单次上传上限，以下文件未随本次注入：',
+      reinjectImage: '图片'
     }
   };
 
@@ -121,6 +153,8 @@
     if (toggleSelect && !messageSelectMode) toggleSelect.textContent = t('select');
     if (toggleSelect && messageSelectMode) toggleSelect.textContent = t('cancel');
     if (exportSelected) exportSelected.textContent = `${t('selected')} (${selectedMessages.size})`;
+    const reinjectBtn = document.getElementById('ds-reinject');
+    if (reinjectBtn && !reinjectBtn.disabled) reinjectBtn.textContent = t('reinject');
   }
 
   loadSettings();
@@ -480,6 +514,15 @@
   // them in the page's main world and hands back plain data. The chip itself
   // has no link and the <img> only points at a downscaled thumbnail.
   let attachmentMetaCache = new Map();
+
+  // DeepSeek is a SPA: moving between conversations does not reload the content
+  // script, so a cache filled in one conversation would leak into the next one
+  let lastHref = location.href;
+  setInterval(() => {
+    if (location.href === lastHref) return;
+    lastHref = location.href;
+    attachmentMetaCache = new Map();
+  }, 1000);
 
   async function refreshAttachmentMeta() {
     try {
@@ -848,6 +891,7 @@
       </div>
       <button id="ds-toggle-select"></button>
       <button id="ds-export-selected" style="display:none;"></button>
+      <button id="ds-reinject"></button>
     `;
     bar.style.cssText = `
       position: fixed;
@@ -924,11 +968,13 @@
     // Other buttons
     const selectBtn = bar.querySelector('#ds-toggle-select');
     const exportSelBtn = bar.querySelector('#ds-export-selected');
+    const reinjectBtn = bar.querySelector('#ds-reinject');
     selectBtn.style.cssText = btnStyle + `border-radius: 6px;`;
     exportSelBtn.style.cssText = btnStyle + `border-radius: 6px; display: none;`;
+    reinjectBtn.style.cssText = btnStyle + `border-radius: 6px;`;
 
     // Hover effects
-    [exportBtn, dropdownBtn, selectBtn, exportSelBtn].forEach(btn => {
+    [exportBtn, dropdownBtn, selectBtn, exportSelBtn, reinjectBtn].forEach(btn => {
       btn.addEventListener('mouseenter', () => btn.style.background = '#444');
       btn.addEventListener('mouseleave', () => {
         if (!btn.classList.contains('active-select')) btn.style.background = '#333';
@@ -944,6 +990,7 @@
     document.getElementById('ds-export-zip').textContent = t('formatZip');
     document.getElementById('ds-toggle-select').textContent = t('select');
     document.getElementById('ds-export-selected').textContent = `${t('selected')} (0)`;
+    document.getElementById('ds-reinject').textContent = t('reinject');
 
     // Dropdown toggle
     let menuOpen = false;
@@ -966,6 +1013,7 @@
     document.getElementById('ds-export-zip').onclick = () => { setExportFormat('zip'); menu.style.display = 'none'; };
     document.getElementById('ds-export-selected').onclick = exportSelectedMessages;
     document.getElementById('ds-toggle-select').onclick = toggleMessageSelect;
+    document.getElementById('ds-reinject').onclick = reinjectToNewChat;
 
     // reflect the current export format (and any language change)
     updateAllText();
@@ -1406,6 +1454,261 @@
 
     // Exit select mode
     toggleMessageSelect();
+  }
+
+  // === Re-inject into a new conversation ===
+  // DeepSeek's own file reader cannot open the signed URLs that the exported
+  // markdown carries (it fetches them anonymously), so carrying a conversation
+  // into a fresh session means uploading the bytes again: the transcript as a
+  // .md file, plus every attachment it mentions.
+
+  const REINJECT_MAX_FILES = 50;          // DeepSeek allows 50 files per chat
+  const REINJECT_MAX_FILE_MB = 100;       // and 100 MB per file
+  const REINJECT_CHUNK = 3 * 1024 * 1024; // bytes per message hop
+
+  const MIME_BY_EXT = {
+    pdf: 'application/pdf', md: 'text/markdown', markdown: 'text/markdown',
+    txt: 'text/plain', csv: 'text/csv', tsv: 'text/tab-separated-values',
+    json: 'application/json', html: 'text/html', htm: 'text/html', xml: 'text/xml',
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+    webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml', ico: 'image/x-icon',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    ppt: 'application/vnd.ms-powerpoint',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    zip: 'application/zip'
+  };
+
+  function mimeFor(name, fallback) {
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    return MIME_BY_EXT[ext] || fallback || 'application/octet-stream';
+  }
+
+  // The worker holds the fetched bytes and streams them out in chunks - the
+  // messaging channel is JSON-only, so a File cannot cross it directly
+  async function stageAttachmentBytes(url) {
+    const staged = await sendMessageWithTimeout({ action: 'stageAttachment', url }, 180000);
+    if (!staged || !staged.success) throw new Error((staged && staged.error) || 'fetch failed');
+    const { id, size, mime } = staged;
+    const bytes = new Uint8Array(size);
+    try {
+      for (let offset = 0; offset < size; offset += REINJECT_CHUNK) {
+        const part = await sendMessageWithTimeout(
+          { action: 'attachmentChunk', id, offset, length: REINJECT_CHUNK }, 60000);
+        if (!part || !part.success) throw new Error((part && part.error) || 'chunk failed');
+        const bin = atob(part.base64);
+        for (let i = 0; i < bin.length; i++) bytes[offset + i] = bin.charCodeAt(i);
+      }
+    } finally {
+      sendMessageWithTimeout({ action: 'dropAttachment', id }, 5000).catch(() => {});
+    }
+    return { bytes, mime };
+  }
+
+  function messagesToReinjectMd(messages, title, skipped) {
+    const joiner = lang === 'zh' ? '、' : ', ';
+    let md = `# ${t('reinjectMdTitle')}: ${title}\n\n`;
+    md += `> ${t('reinjectMdNote')}\n\n`;
+    if (skipped.length) md += `> ${t('reinjectMdSkipped')} ${skipped.join(joiner)}\n\n`;
+    md += `---\n\n`;
+
+    const body = (m) => {
+      const out = m.content
+        // Signed URLs are useless to DeepSeek itself - the file travels as a
+        // real upload, so keep only its name in the transcript
+        .replace(/📎\s*\[([^\]]+)\]\(https:\/\/files\.deepseeksvc\.com[^)]*\)\s*(\([^)]*\))?/g,
+          (full, name, meta) => `📎 ${name}${meta ? ' ' + meta : ''}`)
+        .replace(/!\[([^\]]*)\]\([^)]*\)/g, (full, alt) => `📎 ${alt || t('reinjectImage')}`);
+      return dedupeAttachments(out);
+    };
+
+    let round = 0;
+    let i = 0;
+    while (i < messages.length) {
+      round++;
+      md += `## Round ${round}\n\n`;
+      md += `### ${messages[i].role.toUpperCase()}\n\n${body(messages[i])}\n\n`;
+      i++;
+      while (i < messages.length && messages[i].role === 'assistant') {
+        md += `### ${messages[i].role.toUpperCase()}\n\n${body(messages[i])}\n\n`;
+        i++;
+      }
+      md += `---\n\n`;
+    }
+    return md;
+  }
+
+  // The sidebar button label is localised; the element itself is a leaf text
+  // node, so match on its own text rather than the container's
+  const NEW_CHAT_RE = /^(开启新对话|新对话|New chat)$/i;
+
+  function clickNewChat() {
+    const el = Array.from(document.querySelectorAll('button, a, [role="button"], span, div'))
+      .find(e => e.children.length === 0 && NEW_CHAT_RE.test((e.innerText || '').trim()));
+    if (!el) return false;
+    const btn = el.closest('button, a, [role="button"]') || el;
+    btn.click();
+    return true;
+  }
+
+  async function waitForComposer(timeout = 20000) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      if (document.querySelector('textarea') && document.querySelector('input[type="file"]')) return true;
+      await new Promise(r => setTimeout(r, 300));
+    }
+    return false;
+  }
+
+  // The file chips render in the composer, a few levels above the textarea
+  function composerRoot() {
+    const ta = document.querySelector('textarea');
+    if (!ta) return null;
+    let el = ta;
+    for (let i = 0; i < 8 && el.parentElement; i++) el = el.parentElement;
+    return el;
+  }
+
+  function setComposerText(text) {
+    const ta = document.querySelector('textarea');
+    if (!ta) return false;
+    // React owns the value property - bypass the instance setter so its
+    // onChange sees a real edit
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
+    setter.call(ta, text);
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    ta.focus();
+    return true;
+  }
+
+  function injectFiles(files) {
+    const input = document.querySelector('input[type="file"]');
+    if (!input) return false;
+    const dt = new DataTransfer();
+    for (const f of files) dt.items.add(f);
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+
+  // Uploaded files render as chips, but images render as 64px thumbnails, so
+  // both have to be counted before the message is safe to send
+  function composerUploadCount(root) {
+    const chips = root.querySelectorAll('.ds-animated-size-item').length;
+    const images = Array.from(root.querySelectorAll('img[alt]'))
+      .filter(i => /\.(png|jpe?g|webp|gif|bmp|svg|ico)$/i.test(i.getAttribute('alt') || ''))
+      .length;
+    return chips + images;
+  }
+
+  async function waitForUploads(expected, timeout = 300000) {
+    const deadline = Date.now() + timeout;
+    let ready = 0;
+    let lastNote = 0;
+    while (Date.now() < deadline) {
+      const root = composerRoot();
+      if (root) {
+        ready = composerUploadCount(root);
+        const busy = /上传中|解析中|uploading|parsing/i.test(root.innerText || '');
+        if (ready >= expected && !busy) return ready;
+      }
+      // toasts are short-lived - keep the user posted on a slow upload
+      if (Date.now() - lastNote > 4000) {
+        lastNote = Date.now();
+        showToast(`${t('reinjectUploading')} ${Math.min(ready, expected)}/${expected}`);
+      }
+      await new Promise(r => setTimeout(r, 1200));
+    }
+    return ready;
+  }
+
+  async function reinjectToNewChat() {
+    const btn = document.getElementById('ds-reinject');
+    if (!btn || btn.disabled) return;
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = t('reinjectBusy');
+
+    try {
+      showToast(t('reinjectCollecting'));
+      // start clean - the cache may still hold the previous conversation
+      attachmentMetaCache = new Map();
+      const messages = await scrollAndCollectAll();
+      if (!messages || !messages.length) {
+        showToast(t('noMessages'), true);
+        return;
+      }
+
+      // one slot is reserved for the transcript itself
+      const budget = REINJECT_MAX_FILES - 1;
+      const infos = [];
+      for (const info of attachmentMetaCache.values()) {
+        if (!info.url) continue;
+        if (infos.some(x => x.fileName === info.fileName)) continue;
+        infos.push(info);
+      }
+      const uploadable = infos.slice(0, budget);
+      const skipped = infos.slice(budget).map(i => i.fileName);
+
+      const files = [];
+      for (let i = 0; i < uploadable.length; i++) {
+        const info = uploadable[i];
+        showToast(`${t('reinjectFetching')} ${i + 1}/${uploadable.length}`);
+        try {
+          let name = info.fileName;
+          const { bytes, mime } = await stageAttachmentBytes(info.url);
+          if (bytes.length > REINJECT_MAX_FILE_MB * 1024 * 1024) {
+            skipped.push(name);
+            continue;
+          }
+          // images come back re-encoded as webp - keep the extension honest
+          if (mime.includes('webp') && /\.(png|jpe?g)$/i.test(name)) {
+            name = name.replace(/\.(png|jpe?g)$/i, '.webp');
+          }
+          files.push(new File([bytes], name, { type: mimeFor(name, mime) }));
+        } catch (e) {
+          console.warn('[DS Note] attachment re-fetch failed', info.fileName, e);
+          skipped.push(info.fileName);
+        }
+      }
+
+      showToast(t('reinjectBuilding'));
+      const title = document.title || 'DeepSeek Conversation';
+      const md = messagesToReinjectMd(messages, title, skipped);
+      const mdName = `${slugify(title) || 'deepseek'}-${stamp(true)}.md`;
+      files.unshift(new File([md], mdName, { type: 'text/markdown' }));
+
+      if (!clickNewChat()) {
+        showToast(t('reinjectNoChat'), true);
+        return;
+      }
+      if (!await waitForComposer()) {
+        showToast(t('reinjectNoChat'), true);
+        return;
+      }
+      // give the SPA a beat to mount the composer before poking at it
+      await new Promise(r => setTimeout(r, 800));
+
+      setComposerText(t('reinjectPrompt'));
+      if (!injectFiles(files)) {
+        showToast(t('reinjectFailed'), true);
+        return;
+      }
+
+      const ready = await waitForUploads(files.length);
+      const note = ready >= files.length
+        ? `${t('reinjectDone')} ${files.length} ${t('reinjectFiles')}`
+        : `${t('reinjectDone')} ${ready}/${files.length} (${t('reinjectPartial')})`;
+      showToast(note, ready < files.length);
+    } catch (e) {
+      console.error('[DS Note] re-inject failed', e);
+      showToast(`${t('reinjectFailed')}: ${e && e.message ? e.message : e}`, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
   }
 
   function initExportBar() {
