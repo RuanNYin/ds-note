@@ -485,7 +485,14 @@
     try {
       const res = await sendMessageWithTimeout({ action: 'attachmentMeta' }, 15000);
       if (res && res.success && Array.isArray(res.files)) {
-        attachmentMetaCache = new Map(res.files.map(f => [f.fileName, f]));
+        // MERGE, not replace: only the messages rendered right now are visible
+        // to the fiber walk, and a long conversation renders its history in
+        // chunks while the export scrolls
+        for (const f of res.files) {
+          if (f.fileName && !attachmentMetaCache.has(f.fileName)) {
+            attachmentMetaCache.set(f.fileName, f);
+          }
+        }
       }
     } catch (e) {
       // page not reachable (or extension reloaded) - fall back to DOM only
@@ -510,6 +517,23 @@
       if (key.endsWith(name) || name.endsWith(key)) return value;
     }
     return null;
+  }
+
+  // Attachments are only resolvable while their message is rendered, so the
+  // markdown collected during the scroll may still hold plain names. Once the
+  // whole conversation has been walked, put the links back in.
+  function linkAttachments(text) {
+    if (!text || !attachmentMetaCache.size) return text;
+    let out = text.replace(/📎\s*(?!\[)([^\n]+?)\s*\(([^()\n]*)\)\s*$/gm, (full, name, meta) => {
+      const key = name.trim();
+      const info = findMeta(key);
+      return info && info.url ? `📎 [${key}](${info.url}) (${meta})` : full;
+    });
+    out = out.replace(/!\[([^\]]*)\]\((https:\/\/files\.deepseeksvc\.com[^)]*)\)/g, (full, alt, url) => {
+      const info = findMeta(alt.trim());
+      return info && info.url ? `![${alt}](${info.url})` : full;
+    });
+    return out;
   }
 
   // DeepSeek renders uploaded/pasted files as a chip: a file icon plus two
@@ -709,7 +733,9 @@
     const markdown = markdowns.length > 0 ? markdowns[markdowns.length - 1] : null;
     // User messages have no .ds-markdown; convert their body the same way so
     // attachments (images, file chips) are not dropped
-    const content = markdown ? htmlToMarkdown(markdown) : htmlToMarkdown(messageSource(messageEl));
+    const content = linkAttachments(
+      markdown ? htmlToMarkdown(markdown) : htmlToMarkdown(messageSource(messageEl))
+    );
     // Keep raw text for search (without LaTeX conversion)
     const rawText = messageEl.innerText.trim();
 
@@ -1120,8 +1146,24 @@
     return messages;
   }
 
+  // DeepSeek sometimes renders the same attachment twice inside one message
+  // (e.g. a hidden preview copy) - keep one line per attachment
+  function dedupeAttachments(text) {
+    if (!text) return text;
+    const seen = new Set();
+    return text.split('\n').filter(line => {
+      const isAttachment = line.includes('📎') || line.startsWith('![');
+      if (!isAttachment) return true;
+      const key = line.trim();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    }).join('\n');
+  }
+
   function messagesToMd(messages, title) {
     let md = `# ${title}\n\nExported: ${new Date().toLocaleString()}\n\n---\n\n`;
+    const body = (m) => dedupeAttachments(linkAttachments(m.content));
     // Group each prompt with the reply that belongs to it, so a round reads
     // as one exchange instead of two unrelated sections
     let round = 0;
@@ -1129,10 +1171,10 @@
     while (i < messages.length) {
       round++;
       md += `## Round ${round}\n\n`;
-      md += `### ${messages[i].role.toUpperCase()}\n\n${messages[i].content}\n\n`;
+      md += `### ${messages[i].role.toUpperCase()}\n\n${body(messages[i])}\n\n`;
       i++;
       while (i < messages.length && messages[i].role === 'assistant') {
-        md += `### ${messages[i].role.toUpperCase()}\n\n${messages[i].content}\n\n`;
+        md += `### ${messages[i].role.toUpperCase()}\n\n${body(messages[i])}\n\n`;
         i++;
       }
       md += `---\n\n`;
@@ -1259,8 +1301,14 @@
 
       // Scroll down
       scrollContainer.scrollTop += scrollStep;
+      // The virtual list only keeps a window of messages mounted, so the
+      // attachment metadata has to be read as the history scrolls past
+      if (i % 8 === 0) await refreshAttachmentMeta();
       await new Promise(r => setTimeout(r, 150));
     }
+
+    // last chance: whatever is rendered at the end of the walk
+    await refreshAttachmentMeta();
 
     return Array.from(allMessages.values());
   }
