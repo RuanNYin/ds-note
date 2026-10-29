@@ -511,10 +511,20 @@ function toPlain(msgs) {
 
 function toMd(msgs, title) {
   let md = `# ${title || t('title')}\n\n`;
-  msgs.forEach((m, i) => {
-    const star = m.starred ? ' ⭐' : '';
-    md += `### ${i + 1}. ${t(m.role)}${star}\n\n${m.content}\n\n---\n\n`;
-  });
+  // Group each prompt with the reply that belongs to it
+  let round = 0;
+  let i = 0;
+  while (i < msgs.length) {
+    round++;
+    md += `## Round ${round}\n\n`;
+    md += `### ${t(msgs[i].role)}\n\n${msgs[i].content}\n\n`;
+    i++;
+    while (i < msgs.length && msgs[i].role === 'assistant') {
+      md += `### ${t(msgs[i].role)}\n\n${msgs[i].content}\n\n`;
+      i++;
+    }
+    md += `---\n\n`;
+  }
   return md;
 }
 

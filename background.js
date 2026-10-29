@@ -201,7 +201,6 @@ async function buildAttachmentZip(md, baseName) {
 function collectFilesInPage() {
   const files = [];
   const seen = new Set();
-  const isFile = (o) => o && typeof o.signedPath === 'string' && typeof o.fileName === 'string';
   // signedPath is "/file?file_id=..." - the real endpoint lives under /api and
   // requires a ty= type. The server only serves some types per file kind:
   //   ty=r  the original bytes (non-image files)
@@ -219,14 +218,22 @@ function collectFilesInPage() {
       let v;
       try { v = obj[k]; } catch (e) { continue; }
       if (!v || typeof v !== 'object') continue;
-      if (k === 'file' && isFile(v)) {
+      if (k === 'file' && v.fileName && typeof v.fileName === 'string') {
+        // the signed path is the usual source, but some kinds of file
+        // (pdf and friends) carry a different field - take whatever URL-ish
+        // value is there
+        const path = [v.signedPath, v.signedUrl, v.previewUrl, v.downloadUrl, v.url, v.path]
+          .find(x => typeof x === 'string' && (x.startsWith('/') || x.startsWith('http')));
         files.push({
           fileName: v.fileName,
-          url: BASE + v.signedPath + typeParam(v.isImage),
+          url: path
+            ? (path.startsWith('http') ? path : BASE + path + typeParam(v.isImage))
+            : '',
           size: v.fileSize,
           isImage: !!v.isImage,
           width: v.width,
-          height: v.height
+          height: v.height,
+          status: v.status
         });
         continue;
       }

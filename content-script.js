@@ -457,44 +457,13 @@
 
   // Detect role by checking message content patterns
   function getMessageRoleFromElement(el) {
-    // AI messages typically have "已思考" or multiple .ds-markdown sections
-    const hasThinking = el.innerText?.includes('已思考');
-    const markdowns = el.querySelectorAll('.ds-markdown');
-
-    if (hasThinking || markdowns.length > 1) {
-      return 'assistant';
-    }
-
-    // Check parent class - collect all unique parent classes
-    const allMsgs = document.querySelectorAll('.ds-message');
-    const parentClasses = new Map();
-
-    for (const msg of allMsgs) {
-      const pc = msg.parentElement?.className?.split(' ')[0];
-      if (pc) {
-        parentClasses.set(pc, (parentClasses.get(pc) || 0) + 1);
-      }
-    }
-
-    // If we have two parent classes, the less common one is likely user (fewer user messages typically)
-    const myParentClass = el.parentElement?.className?.split(' ')[0];
-
-    if (parentClasses.size === 2) {
-      const entries = Array.from(parentClasses.entries());
-      // User messages are typically fewer, or check content
-      const [class1, count1] = entries[0];
-      const [class2, count2] = entries[1];
-
-      // If this message's parent is the less common class, likely user
-      if (myParentClass === class1 && count1 < count2) return 'user';
-      if (myParentClass === class2 && count2 < count1) return 'user';
-
-      // Fallback: check if has .ds-markdown (AI has it, user might not)
-      if (!el.querySelector('.ds-markdown')) return 'user';
-    }
-
-    // Default based on .ds-markdown presence
-    return el.querySelector('.ds-markdown') ? 'assistant' : 'user';
+    // AI replies are rendered as markdown blocks; user messages are plain text
+    // (sometimes with attachments). Counting how many messages share a parent
+    // class is not a usable signal: as soon as the user sends more messages
+    // than the assistant replies, every message gets tagged as the user's.
+    if (el.querySelector('.ds-markdown')) return 'assistant';
+    if (el.innerText?.includes('已思考')) return 'assistant';
+    return 'user';
   }
 
   const FILE_CHIP_MARK = 'data-ds-file-chip';
@@ -677,13 +646,28 @@
         case 'img': {
           const alt = node.getAttribute('alt') || '';
           const src = node.getAttribute('src') || '';
+          // skip decorations (avatars, icons) - only real attachments have a
+          // name or point at the attachment CDN
+          const isAttachment = !!alt || src.includes('files.deepseeksvc');
+          if (!isAttachment) return '';
           // the <img> usually points at a downscaled thumbnail - link the
           // original file when the attachment metadata knows about it
           const info = findMeta(alt);
           return `![${alt}](${info ? info.url : src})`;
         }
-        case 'div': case 'span': case 'section':
+        case 'div': case 'span': case 'section': {
+          // At the root of a user message the attachment and the typed prompt
+          // can sit in separate nodes - keep them apart instead of gluing
+          // them into one line
+          if (node === clone && node.childNodes.length > 1) {
+            return Array.from(node.childNodes)
+              .map(convert)
+              .map(s => s.trim())
+              .filter(Boolean)
+              .join('\n\n') + '\n\n';
+          }
           return children;
+        }
         default:
           return children;
       }
@@ -975,7 +959,10 @@
   function messageSource(el) {
     const markdowns = el.querySelectorAll('.ds-markdown');
     if (markdowns.length > 0) return markdowns[markdowns.length - 1];
-    return el.querySelector('div') || el;
+    // User messages have no markdown block, and the typed prompt and the
+    // attachment can sit in different nodes - convert the whole message
+    // instead of guessing which child holds the text.
+    return el;
   }
 
   // Cheap, stable identity of a message (independent of its DOM position)
@@ -1135,9 +1122,21 @@
 
   function messagesToMd(messages, title) {
     let md = `# ${title}\n\nExported: ${new Date().toLocaleString()}\n\n---\n\n`;
-    messages.forEach((m, i) => {
-      md += `## ${i + 1}. ${m.role.toUpperCase()}\n\n${m.content}\n\n---\n\n`;
-    });
+    // Group each prompt with the reply that belongs to it, so a round reads
+    // as one exchange instead of two unrelated sections
+    let round = 0;
+    let i = 0;
+    while (i < messages.length) {
+      round++;
+      md += `## Round ${round}\n\n`;
+      md += `### ${messages[i].role.toUpperCase()}\n\n${messages[i].content}\n\n`;
+      i++;
+      while (i < messages.length && messages[i].role === 'assistant') {
+        md += `### ${messages[i].role.toUpperCase()}\n\n${messages[i].content}\n\n`;
+        i++;
+      }
+      md += `---\n\n`;
+    }
     return md;
   }
 
@@ -1235,9 +1234,9 @@
           // AI: take last markdown (main response)
           content = extractTextWithLatex(markdowns[markdowns.length - 1]);
         } else {
-          // User: take first div
-          const firstDiv = el.querySelector('div');
-          content = firstDiv ? extractTextWithLatex(firstDiv) : el.innerText.trim();
+          // User: convert the whole message, the prompt and the attachment
+          // may live in different nodes
+          content = extractTextWithLatex(messageSource(el));
         }
 
         if (content.length < 3) return;
